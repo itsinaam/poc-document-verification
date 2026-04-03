@@ -1,0 +1,25 @@
+# Ignore environment variables
+.env
+
+# Ignore Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Ignore virtual environment
+venv/
+env/
+
+# Ignore uploads folder (optional, if you don't want to commit uploaded files)
+uploads/
+
+# Ignore database files (if any local SQLite, optional)
+*.db
+
+# Ignore IDE/editor files
+.vscode/
+.idea/
+*.swp
+.env
+myenv/
+test.py
