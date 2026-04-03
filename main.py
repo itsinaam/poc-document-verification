@@ -32,7 +32,7 @@ from models import DocumentAnalysis
 # ===============================
 app = FastAPI(title="OCR Extraction API", docs_url="/api/docs", redoc_url="/api/redoc")
 
-UPLOAD_FOLDER = os.path.join(os.getcwd(), "uploads")
+UPLOAD_FOLDER = "/tmp"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app.add_middleware(
