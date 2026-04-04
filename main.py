@@ -309,6 +309,36 @@ def get_document_by_id(doc_id: int):
 
     finally:
         db.close()
+@app.delete("/api/document/{doc_id}")
+def delete_document_by_id(doc_id: int):
+
+    db = SessionLocal()
+
+    try:
+        record = db.query(DocumentAnalysis)\
+                   .filter(DocumentAnalysis.id == doc_id)\
+                   .first()
+
+        # ===============================
+        # NOT FOUND
+        # ===============================
+        if not record:
+            raise HTTPException(status_code=404, detail="Record not found")
+
+        # ===============================
+        # DELETE
+        # ===============================
+        db.delete(record)
+        db.commit()
+
+        return {"message": f"Document ID {doc_id} deleted successfully"}
+
+    except Exception as e:
+        db.rollback()
+        return {"error": str(e)}
+
+    finally:
+        db.close()
 
 
 
