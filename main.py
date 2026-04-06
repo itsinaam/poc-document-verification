@@ -93,7 +93,7 @@ def extract_final_data(text):
             - Extract date → if missing return "date not present"
             - If date belongs to current year ({current_year}) → is_traveled = true
             - else false
-            - Also want confidence score of he/she is traveled or not (0.0 to 1.0)
+            - Also want confidence score of he/she is traveled or not (0.0 to 1.0), if is_traveled is true then confidence score should be greater than 0.9 else less than 0.3
             - Flight name if is present in the text → if not present return "flight name not present"
             - Seat number if is present in the text → if not present return "seat number not present"
             - From location if is present in the text → if not present return "from location not present"
