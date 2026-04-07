@@ -4,8 +4,8 @@ import json
 import time
 import shutil
 import requests
+import base64
 from datetime import datetime
-
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -136,6 +136,75 @@ def extract_final_data(text):
             "error": str(e)
         }
 
+def extract_data_from_image(base64_image, mime_type):
+    current_year = datetime.now().year
+
+    prompt = f"""
+            You are an extraction system looking at an image.
+
+            Rules:
+            - Extract name of person → if missing return "unknown employee"
+            - Extract date → if missing return "date not present"
+            - If date belongs to current year ({current_year}) → is_traveled = true
+            - else false
+            - Also want confidence score of he/she is traveled or not (0.0 to 1.0), if is_traveled is true then confidence score should be greater than 0.9 else less than 0.3
+            - Flight name if is present in the text/image → if not present return "flight name not present"
+            - Seat number if is present in the text/image → if not present return "seat number not present"
+            - From location if is present in the text/image → if not present return "from location not present"
+            - To location if is present in the text/image → if not present return "to location not present"
+
+            Return ONLY JSON:
+
+            {{
+            "name": "string",
+            "date": "string",
+            "is_traveled": true,
+            "confidence_score": "string",
+            "flight_name": "string",
+            "seat_number": "string",
+            "from_location": "string",
+            "to_location": "string"
+            }}
+            """
+
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": "Strict JSON extractor"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{mime_type};base64,{base64_image}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            temperature=0,
+        )
+        
+        # Sometimes GPT returns markdown formatted JSON
+        content = response.choices[0].message.content.strip()
+        if content.startswith("```json"):
+            content = content[7:-3].strip()
+        elif content.startswith("```"):
+            content = content[3:-3].strip()
+            
+        return json.loads(content)
+
+    except Exception as e:
+        return {
+            "name": "unknown employee",
+            "date": "date not present",
+            "is_traveled": False,
+            "error": str(e)
+        }
+
 @app.get("/")
 def home():
     return {"message": "FastAPI Backend Running 🚀"}
@@ -157,15 +226,22 @@ async def upload_file(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, buffer)
 
     # ===============================
-    # EXTRACT TEXT
+    # EXTRACT TEXT OR DATA
     # ===============================
     if filename.lower().endswith(".pdf"):
         extracted_text = extract_text_from_pdf(file_path)
+        result = extract_final_data(extracted_text)
     else:
-        with open(file_path, "rb") as f:
-            extracted_text = extract_text_from_image(f)
+        with open(file_path, "rb") as image_file:
+            base64_image = base64.b64encode(image_file.read()).decode("utf-8")
+            
+        ext = filename.split('.')[-1].lower()
+        mime_type = "image/jpeg"
+        if ext in ["png", "jpg", "jpeg", "webp", "gif"]:
+            mime_type = f"image/{ext if ext != 'jpg' else 'jpeg'}"
+            
+        result = extract_data_from_image(base64_image, mime_type)
 
-    result = extract_final_data(extracted_text)
     status = "approved" if result.get("is_traveled") else "rejected"
 
     db = SessionLocal()
