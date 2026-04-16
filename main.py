@@ -5,6 +5,8 @@ import time
 import shutil
 import requests
 import base64
+import pandas as pd
+import numpy as np
 from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
@@ -416,6 +418,53 @@ def delete_document_by_id(doc_id: int):
     finally:
         db.close()
 
+
+
+@app.get("/api/parcel-data")
+def get_parcel_data():
+    """
+    Returns all data from the parcel_data.csv file
+    """
+    try:
+        # Read the CSV file
+        csv_path = os.path.join(os.path.dirname(__file__), "zoning_data.csv")
+        print(f"Looking for CSV at: {csv_path}")
+        
+        if not os.path.exists(csv_path):
+            raise HTTPException(status_code=404, detail="parcel_data.csv file not found")
+        
+        # Read CSV into DataFrame
+        df = pd.read_csv(csv_path)
+        
+        # Convert all numpy types to native Python types
+        df = df.astype(object).where(pd.notna(df), None)
+        
+        # Custom function to convert numpy types
+        def convert_types(obj):
+            if isinstance(obj, dict):
+                return {k: convert_types(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_types(v) for v in obj]
+            elif isinstance(obj, (pd.Series, np.ndarray)):
+                return [convert_types(v) for v in obj]
+            elif hasattr(obj, 'item'):
+                # Convert numpy types to native Python types
+                return obj.item()
+            else:
+                return obj
+        
+        # Convert DataFrame to list of dictionaries
+        data = df.to_dict(orient='records')
+        data = convert_types(data)
+        
+        return {
+            "status": "success",
+            "total_records": len(data),
+            "data": data
+        }
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading parcel data: {str(e)}")
 
 
 if __name__ == "__main__":
