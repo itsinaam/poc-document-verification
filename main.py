@@ -427,7 +427,7 @@ def get_parcel_data():
     """
     try:
         # Read the CSV file
-        csv_path = os.path.join(os.path.dirname(__file__), "zoning_data.csv")
+        csv_path = os.path.join(os.path.dirname(__file__), "parcel_data.csv")
         print(f"Looking for CSV at: {csv_path}")
         
         if not os.path.exists(csv_path):
@@ -467,7 +467,58 @@ def get_parcel_data():
         raise HTTPException(status_code=500, detail=f"Error reading parcel data: {str(e)}")
 
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+@app.get("/api/zoning-filter")
+def get_filtered_zoning_data(
+    zones: str = "R-4,R-6,R-10"
+):
+    """
+    Returns filtered zoning data from zoning_data.csv
+    Filters by the provided zoning values.
+    """
+    try:
+        zoning_path = os.path.join(os.path.dirname(__file__), "zoning_data.csv")
+        if not os.path.exists(zoning_path):
+            raise HTTPException(status_code=404, detail="zoning_data.csv not found")
 
+        zoning_df = pd.read_csv(zoning_path)
+        zoning_list = [z.strip() for z in zones.split(",") if z.strip()]
+
+        if not zoning_list:
+            raise HTTPException(status_code=400, detail="Please provide at least one zoning value")
+
+        filtered_df = zoning_df[zoning_df['ZONE_TYPE'].isin(zoning_list)].copy()
+
+        map_columns = [
+            'geometry', 'GLOBALID', 'OBJECTID', 'ZONE_TYPE', 'ZONE_TYPE_DECODE',
+            'HEIGHT', 'FRONTAGE', 'CONDITIONAL', 'ZONING', 'ZN_CASE_NUM',
+            'EFF_DATE', 'ORDINANCE', 'PLAN_NAME', 'INTO_UDO', 'COND_LINK'
+        ]
+
+        existing_cols = [col for col in map_columns if col in filtered_df.columns]
+        result_df = filtered_df[existing_cols]
+        result_df = result_df.astype(object).where(pd.notna(result_df), None)
+
+        def convert_types(obj):
+            if isinstance(obj, dict):
+                return {k: convert_types(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_types(v) for v in obj]
+            elif hasattr(obj, 'item'):
+                return obj.item()
+            else:
+                return obj
+
+        data = result_df.to_dict(orient='records')
+        data = convert_types(data)
+
+        return {
+            "status": "success",
+            "filters_applied": {
+                "zones": zoning_list
+            },
+            "total_records": len(data),
+            "data": data
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error filtering zoning data: {str(e)}")
