@@ -18,7 +18,7 @@ from models import Product, Order
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("PSYCOPG_DATABASE_URL")
 
 
 llm = ChatOpenAI()
