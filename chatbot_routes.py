@@ -117,7 +117,7 @@ def delete_thread(thread_id: str):
     
     try:
         load_dotenv()
-        DATABASE_URL = os.getenv("DATABASE_URL")
+        DATABASE_URL = os.getenv("PSYCOPG_DATABASE_URL")
         
         if not DATABASE_URL:
             return {

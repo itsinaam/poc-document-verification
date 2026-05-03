@@ -6,7 +6,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL")
+DATABASE_URL = os.getenv("PSYCOPG_DATABASE_URL")
 
 if not DATABASE_URL:
     print("DATABASE_URL not found in environment variables")
