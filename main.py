@@ -1,40 +1,30 @@
-import os
-import re
-import json
-import time
-import shutil
-import requests
-import base64
+from langchain_community.document_loaders import PyPDFLoader
+import os,json,time,shutil,base64 
 import pandas as pd
 import numpy as np
 from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from database import SessionLocal
-from models import DocumentAnalysis
-
-from typing import List
+from models import DocumentAnalysis, Product, Order
 from fastapi import UploadFile, File
-
-from dateutil import parser
 from openai import OpenAI
 from dotenv import load_dotenv
+from models import Base
+from database import engine
+from pydantic import BaseModel
+from typing import Optional
+from decimal import Decimal
+from chatbot_routes import router
+
+
 load_dotenv()
 
-# PDF Loader
-from langchain_community.document_loaders import PyPDFLoader
-
-# DB (Assuming already configured)
-from database import SessionLocal
-from models import DocumentAnalysis
-
-# ===============================
-# APP INIT
-# ===============================
-app = FastAPI(title="OCR Extraction API", docs_url="/api/docs", redoc_url="/api/redoc")
+app = FastAPI(title="POC-AI-Agent-Empro", docs_url="/api/docs", redoc_url="/api/redoc")
+app.include_router(router)
 
 UPLOAD_FOLDER = "/tmp"
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 app.add_middleware(
@@ -45,134 +35,64 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-OCR_API_KEY = os.getenv("OCR_API_KEY")
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# ===============================
-# OCR FUNCTIONS
-# ===============================
-def extract_text_from_image(file_obj):
-    filename = "upload.jpg"
 
-    response = requests.post(
-        "https://api.ocr.space/parse/image",
-        files={"file": (filename, file_obj)},
-        data={
-            "apikey": OCR_API_KEY,
-            "language": "eng",
-        },
-    )
+#----------------- Schema ----------------
 
-    result = response.json()
-
-    if result.get("IsErroredOnProcessing"):
-        return ""
-
-    try:
-        return result["ParsedResults"][0]["ParsedText"]
-    except:
-        return ""
+class ProductCreate(BaseModel):
+    name: str
+    category: Optional[str] = None
+    description: Optional[str] = None
+    price: Decimal
+    quantity: Optional[int] = 0
+    brand: Optional[str] = None
+    ingredients: Optional[str] = None
+    usage_instructions: Optional[str] = None
+    skin_type: Optional[str] = None
 
 
 def extract_text_from_pdf(file_path):
     loader = PyPDFLoader(file_path)
     documents = loader.load()
-
     return "\n".join([doc.page_content for doc in documents])
 
-
-# ===============================
-# LLM FUNCTION (UPDATED)
-# ===============================
-def extract_final_data(text):
+def extract_travel_data(text=None, base64_image=None, mime_type=None):
     current_year = datetime.now().year
 
     prompt = f"""
-            You are an extraction system.
+    You are an extraction system.
 
-            Rules:
-            - Extract name of person → if missing return "unknown employee"
-            - Extract date → if missing return "date not present"
-            - If date belongs to current year ({current_year}) → is_traveled = true
-            - else false
-            - Also want confidence score of he/she is traveled or not (0.0 to 1.0), if is_traveled is true then confidence score should be 100 percent else less than 0.3
-            - Flight name if is present in the text → if not present return "flight name not present"
-            - Seat number if is present in the text → if not present return "seat number not present"
-            - From location if is present in the text → if not present return "from location not present"
-            - To location if is present in the text → if not present return "to location not present"
+    Rules:
+    - Extract name of person → if missing return "unknown employee"
+    - Extract date → if missing return "date not present"
+    - If date belongs to current year ({current_year}) → is_traveled = true
+    - else false
+    - Also want confidence score of he/she is traveled or not (0.0 to 1.0), 
+      if is_traveled is true then confidence score should be 1.0 else less than 0.3
+    - Flight name if present → else "flight name not present"
+    - Seat number if present → else "seat number not present"
+    - From location if present → else "from location not present"
+    - To location if present → else "to location not present"
 
-            Return ONLY JSON:
+    Return ONLY JSON:
 
-            {{
-            "name": "string",
-            "date": "string",
-            "is_traveled": true,
-            "confidence_score": "string",
-            "flight_name": "string",
-            "seat_number": "string",
-            "from_location": "string",
-            "to_location": "string"
-            }}
-
-            Text:
-            {text}
-            """
+    {{
+        "name": "string",
+        "date": "string",
+        "is_traveled": true,
+        "confidence_score": "string",
+        "flight_name": "string",
+        "seat_number": "string",
+        "from_location": "string",
+        "to_location": "string"
+    }}
+    """
 
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "Strict JSON extractor"},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0,
-        )
-
-        return json.loads(response.choices[0].message.content)
-
-    except Exception as e:
-        return {
-            "name": "unknown employee",
-            "date": "date not present",
-            "is_traveled": False,
-            "error": str(e)
-        }
-
-def extract_data_from_image(base64_image, mime_type):
-    current_year = datetime.now().year
-
-    prompt = f"""
-            You are an extraction system looking at an image.
-
-            Rules:
-            - Extract name of person → if missing return "unknown employee"
-            - Extract date → if missing return "date not present"
-            - If date belongs to current year ({current_year}) → is_traveled = true
-            - else false
-            - Also want confidence score of he/she is traveled or not (0.0 to 1.0), if is_traveled is true then confidence score should be 100 percent else less than 0.3
-            - Flight name if is present in the text/image → if not present return "flight name not present"
-            - Seat number if is present in the text/image → if not present return "seat number not present"
-            - From location if is present in the text/image → if not present return "from location not present"
-            - To location if is present in the text/image → if not present return "to location not present"
-
-            Return ONLY JSON:
-
-            {{
-            "name": "string",
-            "date": "string",
-            "is_traveled": true,
-            "confidence_score": "string",
-            "flight_name": "string",
-            "seat_number": "string",
-            "from_location": "string",
-            "to_location": "string"
-            }}
-            """
-
-    try:
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
+        # 🔹 Case 1: Image input
+        if base64_image and mime_type:
+            messages = [
                 {"role": "system", "content": "Strict JSON extractor"},
                 {
                     "role": "user",
@@ -186,17 +106,32 @@ def extract_data_from_image(base64_image, mime_type):
                         }
                     ]
                 }
-            ],
+            ]
+
+        # 🔹 Case 2: Text input
+        elif text:
+            messages = [
+                {"role": "system", "content": "Strict JSON extractor"},
+                {"role": "user", "content": f"{prompt}\n\nText:\n{text}"}
+            ]
+
+        else:
+            raise ValueError("Either text or image must be provided")
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
             temperature=0,
         )
-        
-        # Sometimes GPT returns markdown formatted JSON
+
         content = response.choices[0].message.content.strip()
+
+        # 🔹 Clean markdown JSON if exists
         if content.startswith("```json"):
             content = content[7:-3].strip()
         elif content.startswith("```"):
             content = content[3:-3].strip()
-            
+
         return json.loads(content)
 
     except Exception as e:
@@ -204,50 +139,15 @@ def extract_data_from_image(base64_image, mime_type):
             "name": "unknown employee",
             "date": "date not present",
             "is_traveled": False,
+            "confidence_score": "0.0",
+            "flight_name": "flight name not present",
+            "seat_number": "seat number not present",
+            "from_location": "from location not present",
+            "to_location": "to location not present",
             "error": str(e)
         }
-
-@app.get("/")
-def home():
-    return {"message": "FastAPI Backend Running 🚀"}
-
-
-@app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
-
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file uploaded")
-
-    filename = f"{int(time.time())}_{file.filename}"
-    file_path = os.path.join(UPLOAD_FOLDER, filename)
-
-    # ===============================
-    # SAVE FILE
-    # ===============================
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    # ===============================
-    # EXTRACT TEXT OR DATA
-    # ===============================
-    if filename.lower().endswith(".pdf"):
-        extracted_text = extract_text_from_pdf(file_path)
-        result = extract_final_data(extracted_text)
-    else:
-        with open(file_path, "rb") as image_file:
-            base64_image = base64.b64encode(image_file.read()).decode("utf-8")
-            
-        ext = filename.split('.')[-1].lower()
-        mime_type = "image/jpeg"
-        if ext in ["png", "jpg", "jpeg", "webp", "gif"]:
-            mime_type = f"image/{ext if ext != 'jpg' else 'jpeg'}"
-            
-        result = extract_data_from_image(base64_image, mime_type)
-
-    status = "approved" if result.get("is_traveled") else "rejected"
-
-    db = SessionLocal()
-
+    
+def save_analysis_to_db(db, result, file_path, status):
     try:
         record = DocumentAnalysis(
             name=result.get("name"),
@@ -266,37 +166,173 @@ async def upload_file(file: UploadFile = File(...)):
 
         db.add(record)
         db.commit()
+        db.refresh(record)
+
+        return record
 
     except Exception as e:
         db.rollback()
 
-        record = DocumentAnalysis(
+        error_record = DocumentAnalysis(
             status="error",
             error_message=str(e),
             file_path=file_path
         )
-        db.add(record)
+        db.add(error_record)
         db.commit()
 
+        raise e
+
+def get_all_documents(db):
+    return db.query(DocumentAnalysis) \
+             .order_by(DocumentAnalysis.created_at.desc()) \
+             .all()
+
+def calculate_summary(records):
+    return {
+        "total": len(records),
+        "approved": sum(1 for r in records if r.status == "approved"),
+        "rejected": sum(1 for r in records if r.status == "rejected"),
+        "error": sum(1 for r in records if r.status == "error"),
+    }
+
+def format_documents(records):
+    data = []
+
+    for r in records:
+        data.append({
+            "id": r.id,
+            "name": r.name,
+            "date": r.date,
+            "is_traveled": r.is_traveled,
+            "confidence_score": r.confidence_score,
+            "flight_name": r.flight_name,
+            "seat_number": r.seat_number,
+            "from_location": r.from_location,
+            "to_location": r.to_location,
+            "status": r.status,
+            "file_path": r.file_path,
+            "created_at": r.created_at.strftime("%Y-%m-%d %H:%M:%S")
+        })
+
+    return data
+
+def create_product(db, product_data: ProductCreate):
+    try:
+        product = Product(
+            name=product_data.name,
+            category=product_data.category,
+            description=product_data.description,
+            price=product_data.price,
+            quantity=product_data.quantity,
+            brand=product_data.brand,
+            ingredients=product_data.ingredients,
+            usage_instructions=product_data.usage_instructions,
+            skin_type=product_data.skin_type,
+        )
+
+        db.add(product)
+        db.commit()
+        db.refresh(product)
+
+        return product
+
+    except Exception as e:
+        db.rollback()
+        raise e
+
+def get_all_orders(db):
+    return db.query(Order) \
+             .order_by(Order.created_at.desc()) \
+             .all()
+
+def calculate_order_summary(orders):
+    return {
+        "total_orders": len(orders),
+        "pending": sum(1 for o in orders if o.status == "pending"),
+        "completed": sum(1 for o in orders if o.status == "completed"),
+        "cancelled": sum(1 for o in orders if o.status == "cancelled"),
+    }
+
+def format_orders(orders):
+    data = []
+
+    for o in orders:
+        data.append({
+            "id": o.id,
+            "customer_name": o.customer_name,
+            "order_items": o.order_items,
+            "total_amount": str(o.total_amount) if o.total_amount else None,
+            "status": o.status,
+            "order_date": o.order_date.strftime("%Y-%m-%d %H:%M:%S") if o.order_date else None,
+            "created_at": o.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+            "updated_at": o.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+
+    return data
+
+
+@app.get("/api/health")
+def health_check():
+    return {"message": "FastAPI Backend Running 🚀"}
+
+@app.post("/api/init-db")
+def init_db():
+    Base.metadata.create_all(bind=engine)
+    return {"message": "Tables are created successfully!"}
+
+# -------------- DOCUMENT ANALYSIS --------------
+
+@app.post("/api/upload")
+async def upload_file(file: UploadFile = File(...)):
+
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file uploaded")
+
+    filename = f"{int(time.time())}_{file.filename}"
+    file_path = os.path.join(UPLOAD_FOLDER, filename)
+
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    try:
+        if filename.lower().endswith(".pdf"):
+            extracted_text = extract_text_from_pdf(file_path)
+            result = extract_travel_data(text=extracted_text)
+
+        else:
+            with open(file_path, "rb") as image_file:
+                base64_image = base64.b64encode(image_file.read()).decode("utf-8")
+
+            ext = filename.split('.')[-1].lower()
+            mime_type = f"image/{ext if ext != 'jpg' else 'jpeg'}"
+
+            result = extract_travel_data(
+                base64_image=base64_image,
+                mime_type=mime_type
+            )
+
+        status = "approved" if result.get("is_traveled") else "rejected"
+
+        db = SessionLocal()
+        try:
+            save_analysis_to_db(db, result, file_path, status)
+        finally:
+            db.close()
+
+        result["status"] = status
+        return result
+
+    except Exception as e:
         return {"error": str(e)}
 
     finally:
-        db.close()
-
-    # ===============================
-    # DELETE FILE AFTER SAVE ✅
-    # ===============================
-    try:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            print("File deleted:", file_path)
-    except Exception as e:
-        print("File delete error:", e)
-
-    result["status"] = status
-    return result
-
-
+        try:
+            if os.path.exists(file_path):
+                os.remove(file_path)
+                print("File deleted:", file_path)
+        except Exception as e:
+            print("File delete error:", e)
 
 @app.get("/api/documents")
 def dashboard():
@@ -304,41 +340,13 @@ def dashboard():
     db = SessionLocal()
 
     try:
-        records = db.query(DocumentAnalysis)\
-                    .order_by(DocumentAnalysis.created_at.desc())\
-                    .all()
-
-        total = len(records)
-        approved = sum(1 for r in records if r.status == "approved")
-        rejected = sum(1 for r in records if r.status == "rejected")
-        error = sum(1 for r in records if r.status == "error")
-
-        data = []
-
-        for r in records:
-            data.append({
-                "id": r.id,
-                "name": r.name,
-                "date": r.date,
-                "is_traveled": r.is_traveled,
-                "confidence_score": r.confidence_score,
-                "flight_name": r.flight_name,
-                "seat_number": r.seat_number,
-                "from_location": r.from_location,
-                "to_location": r.to_location,
-                "status": r.status,
-                "file_path": r.file_path,
-                "created_at": r.created_at.strftime("%Y-%m-%d %H:%M:%S")
-            })
+        records = get_all_documents(db)
+        summary = calculate_summary(records)
+        formatted_records = format_documents(records)
 
         return {
-            "summary": {
-                "total": total,
-                "approved": approved,
-                "rejected": rejected,
-                "error": error
-            },
-            "records": data
+            "summary": summary,
+            "records": formatted_records
         }
 
     except Exception as e:
@@ -346,7 +354,6 @@ def dashboard():
 
     finally:
         db.close()
-
 
 @app.get("/api/document/{doc_id}")
 def get_document_by_id(doc_id: int):
@@ -358,15 +365,9 @@ def get_document_by_id(doc_id: int):
                    .filter(DocumentAnalysis.id == doc_id)\
                    .first()
 
-        # ===============================
-        # NOT FOUND
-        # ===============================
         if not record:
             raise HTTPException(status_code=404, detail="Record not found")
 
-        # ===============================
-        # RESPONSE
-        # ===============================
         return {
             "id": record.id,
             "name": record.name,
@@ -387,6 +388,7 @@ def get_document_by_id(doc_id: int):
 
     finally:
         db.close()
+
 @app.delete("/api/document/{doc_id}")
 def delete_document_by_id(doc_id: int):
 
@@ -397,15 +399,9 @@ def delete_document_by_id(doc_id: int):
                    .filter(DocumentAnalysis.id == doc_id)\
                    .first()
 
-        # ===============================
-        # NOT FOUND
-        # ===============================
         if not record:
             raise HTTPException(status_code=404, detail="Record not found")
 
-        # ===============================
-        # DELETE
-        # ===============================
         db.delete(record)
         db.commit()
 
@@ -419,6 +415,7 @@ def delete_document_by_id(doc_id: int):
         db.close()
 
 
+#----------------- DAVID - GIS--------------------
 
 @app.get("/api/parcel-data")
 def get_parcel_data():
@@ -465,7 +462,6 @@ def get_parcel_data():
     
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading parcel data: {str(e)}")
-
 
 @app.get("/api/zoning-filter")
 def get_filtered_zoning_data(
@@ -522,3 +518,61 @@ def get_filtered_zoning_data(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error filtering zoning data: {str(e)}")
+
+#------------------- Products ----------------------
+
+
+@app.post("/api/products")
+def add_product(product: ProductCreate):
+
+    db = SessionLocal()
+
+    try:
+        new_product = create_product(db, product)
+
+        return {
+            "message": "Product created successfully",
+            "product": {
+                "id": new_product.id,
+                "name": new_product.name,
+                "category": new_product.category,
+                "price": str(new_product.price),
+                "quantity": new_product.quantity,
+                "brand": new_product.brand,
+                "skin_type": new_product.skin_type,
+                "created_at": new_product.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            }
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+    finally:
+        db.close()
+
+
+#------------------ Get Orders--------------------
+
+@app.get("/api/orders")
+def get_orders():
+
+    db = SessionLocal()
+
+    try:
+        # 🔹 Fetch
+        orders = get_all_orders(db)
+
+        # 🔹 Process
+        summary = calculate_order_summary(orders)
+        formatted_orders = format_orders(orders)
+
+        return {
+            "summary": summary,
+            "orders": formatted_orders
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+    finally:
+        db.close()

@@ -21,6 +21,6 @@ uploads/
 .idea/
 *.swp
 .env
-myenv/
+myenv10/
 test.py
 updated_file.py
