@@ -42,14 +42,13 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 class ProductCreate(BaseModel):
     name: str
-    category: Optional[str] = None
     description: Optional[str] = None
-    price: Decimal
+    price: Optional[str] = None
     quantity: Optional[int] = 0
-    brand: Optional[str] = None
     ingredients: Optional[str] = None
     usage_instructions: Optional[str] = None
-    skin_type: Optional[str] = None
+    suitable_age_range: Optional[str] = None
+    image_url: Optional[str] = None
 
 
 def extract_text_from_pdf(file_path):
@@ -222,14 +221,13 @@ def create_product(db, product_data: ProductCreate):
     try:
         product = Product(
             name=product_data.name,
-            category=product_data.category,
             description=product_data.description,
             price=product_data.price,
             quantity=product_data.quantity,
-            brand=product_data.brand,
             ingredients=product_data.ingredients,
             usage_instructions=product_data.usage_instructions,
-            skin_type=product_data.skin_type,
+            suitable_age_range=product_data.suitable_age_range,
+            image_url=product_data.image_url
         )
 
         db.add(product)
@@ -261,6 +259,9 @@ def format_orders(orders):
     for o in orders:
         data.append({
             "id": o.id,
+            "order_source": o.order_source,
+            "type_of_order": o.type_of_order,
+            "language": o.language,
             "customer_name": o.customer_name,
             "order_items": o.order_items,
             "total_amount": str(o.total_amount) if o.total_amount else None,
@@ -536,11 +537,13 @@ def add_product(product: ProductCreate):
             "product": {
                 "id": new_product.id,
                 "name": new_product.name,
-                "category": new_product.category,
+                "description": new_product.description,
                 "price": str(new_product.price),
                 "quantity": new_product.quantity,
-                "brand": new_product.brand,
-                "skin_type": new_product.skin_type,
+                "suitable_age_range": new_product.suitable_age_range,
+                "ingredients": new_product.ingredients,
+                "usage_instructions": new_product.usage_instructions,
+                "image_url": new_product.image_url,
                 "created_at": new_product.created_at.strftime("%Y-%m-%d %H:%M:%S")
             }
         }

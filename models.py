@@ -31,14 +31,13 @@ class Product(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     name = Column(String(255), nullable=False)
-    category = Column(String(100))
     description = Column(Text)
-    price = Column(DECIMAL(10, 2), nullable=False)
+    price = Column(String(255), nullable=False)
     quantity = Column(Integer, default=0)
-    brand = Column(String(100))
     ingredients = Column(Text)
     usage_instructions = Column(Text)
-    skin_type = Column(String(50))
+    suitable_age_range = Column(String(50))
+    image_url = Column(String(255))
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
@@ -47,9 +46,12 @@ class Order(Base):
     __tablename__ = "orders"
     
     id = Column(Integer, primary_key=True, index=True)
+    order_source = Column(String(255))
     customer_name = Column(String(255))
     order_items = Column(JSON, nullable=False)
-    total_amount = Column(DECIMAL(10, 2))
+    total_amount = Column(String(255), nullable=False)
+    type_of_order = Column(String(50))
+    language = Column(String(50))
     status = Column(String(50), default='pending')
     order_date = Column(DateTime, default=func.now())
     created_at = Column(DateTime, default=func.now())

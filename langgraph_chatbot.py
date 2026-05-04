@@ -38,9 +38,12 @@ def format_orders(orders):
     for o in orders:
         data.append({
             "id": o.id,
+            "order_source": o.order_source,
             "customer_name": o.customer_name,
             "order_items": o.order_items,
             "total_amount": str(o.total_amount) if o.total_amount else None,
+            "type_of_order": o.type_of_order,
+            "language": o.language,
             "status": o.status,
             "order_date": o.order_date.strftime("%Y-%m-%d %H:%M:%S") if o.order_date else None,
             "created_at": o.created_at.strftime("%Y-%m-%d %H:%M:%S"),
@@ -49,40 +52,190 @@ def format_orders(orders):
 
     return data
 
+def parse_price(price_string: str) -> float:
+    """Parse price string and extract numeric value, handling currency symbols and formatting"""
+    import re
+    
+    if not price_string:
+        return 0.0
+        
+    # Remove currency symbols and extra spaces
+    # This regex finds all numbers (including decimals) in the string
+    price_matches = re.findall(r'\d+(?:\.\d+)?', str(price_string))
+    
+    if price_matches:
+        # Take the first numeric value found
+        return float(price_matches[0])
+    
+    # If no number found, try to convert as is (fallback)
+    try:
+        return float(price_string)
+    except ValueError:
+        return 0.0
+
+def detect_customer_type(customer_name: str, quantity: int) -> str:
+    """Automatically detect if customer is B2B or B2C based on name and quantity"""
+    
+    # Business indicators in customer name
+    business_keywords = [
+        'llc', 'inc', 'corp', 'ltd', 'company', 'co.', 'enterprise', 'enterprises',
+        'group', 'corporation', 'incorporated', 'limited', 'business', 'store',
+        'shop', 'retail', 'wholesale', 'distribution', 'distributor', 'trading',
+        'international', 'global', 'industries', 'solutions', 'services', 'agency',
+        'firm', 'associates', 'partners', 'partnership'
+    ]
+    
+    customer_lower = customer_name.lower()
+    
+    # Check for business keywords in name
+    has_business_indicators = any(keyword in customer_lower for keyword in business_keywords)
+    
+    # Business detection logic - prioritize business name indicators
+    if has_business_indicators:
+        return "B2B"  # Business customer regardless of quantity
+    
+    # For individual names, classify based on quantity
+    if quantity >= 10:
+        return "B2B"  # Large quantities suggest business use
+    else:
+        return "B2C"  # Small quantities for individual customers
+        
+    # Additional patterns that suggest B2B:
+    # - Multiple words in business format (e.g., "ABC Beauty Supply")
+    # - All caps names (common in business names)
+    # - Names ending with numbers (branch locations)
+    words = customer_name.split()
+    if len(words) >= 3 and any(word.isupper() for word in words):
+        return "B2B"
+    
+    return "B2C"  # Default to B2C
+
+def detect_language(text: str) -> str:
+    """Auto-detect language from customer name or text"""
+    
+    # Simple language detection based on common patterns
+    text_lower = text.lower()
+    
+    # Check for Japanese characters or names
+    japanese_indicators = ['san', 'kun', 'chan', 'sama', 'tokyo', 'osaka', 'kyoto', 'honda', 'yamaha', 'suzuki']
+    if any(indicator in text_lower for indicator in japanese_indicators):
+        return "ja"
+    
+    # Check for Chinese indicators
+    chinese_indicators = ['li', 'wang', 'zhang', 'liu', 'chen', 'yang', 'beijing', 'shanghai']
+    if any(indicator in text_lower for indicator in chinese_indicators):
+        return "zh"
+    
+    # Check for Arabic indicators
+    arabic_indicators = ['mohammed', 'ahmad', 'hassan', 'ali', 'omar', 'fatima', 'aisha']
+    if any(indicator in text_lower for indicator in arabic_indicators):
+        return "ar"
+    
+    # Check for Spanish indicators
+    spanish_indicators = ['carlos', 'maria', 'jose', 'luis', 'ana', 'juan', 'pedro']
+    if any(indicator in text_lower for indicator in spanish_indicators):
+        return "es"
+    
+    # Check for French indicators
+    french_indicators = ['jean', 'marie', 'pierre', 'jacques', 'françois', 'michel']
+    if any(indicator in text_lower for indicator in french_indicators):
+        return "fr"
+    
+    # Default to English
+    return "en"
+
 
 # Tools
 @tool
-def get_products() -> dict:
-    """Get all products from database"""
+def get_products(
+    fields_only: list = None,
+    include_all: bool = False,
+    product_ids: list = None,
+    names_only: bool = False
+) -> dict:
+    """Get products from database with flexible field selection based on user request.
+    
+    Parameters:
+    - fields_only: List of specific fields to return (e.g., ['name', 'price'])
+    - include_all: If True, return all available fields
+    - product_ids: List of specific product IDs to filter
+    - names_only: If True, return only product names
+    
+    Usage examples:
+    - get_products(names_only=True) -> Only product names
+    - get_products(fields_only=['name', 'price']) -> Name and price only
+    - get_products(include_all=True) -> All product details
+    - get_products(product_ids=[1, 2, 3]) -> Specific products with all details
+    """
     db = SessionLocal()
     try:
-        products = db.query(Product).all()
-        data = [
-            {
+        query = db.query(Product)
+        
+        # Filter by specific product IDs if provided
+        if product_ids:
+            query = query.filter(Product.id.in_(product_ids))
+            
+        products = query.all()
+        
+        # Return only names if requested
+        if names_only:
+            data = [{"id": p.id, "name": p.name} for p in products]
+            return {"status": "success", "data": data, "display_type": "names_only"}
+        
+        # Return specific fields only
+        if fields_only and not include_all:
+            data = []
+            for p in products:
+                item = {"id": p.id}  # Always include ID
+                for field in fields_only:
+                    if hasattr(p, field):
+                        item[field] = getattr(p, field)
+                data.append(item)
+            return {"status": "success", "data": data, "display_type": "selective_fields", "fields": fields_only}
+        
+        # Return all details (default or when include_all=True)
+        data = []
+        for p in products:
+            item = {
                 "id": p.id,
                 "name": p.name,
-                "price": float(p.price),
+                "price": p.price,
                 "description": p.description,
-                "category": p.category,
-                "quantity": p.quantity
+                "quantity": p.quantity,
+                "ingredients": p.ingredients,
+                "usage_instructions": p.usage_instructions,
+                "suitable_age_range": p.suitable_age_range,
+                "image_url": p.image_url
             }
-            for p in products
-        ]
-        return {"status": "success", "data": data}
+            data.append(item)
+            
+        return {"status": "success", "data": data, "display_type": "full_details"}
     finally:
         db.close()
 
 @tool
-def add_product(name: str, price: float, description: str, category: str = None, quantity: int = 0) -> dict:
-    """Add new product"""
+def add_product(
+    name: str, 
+    price: str, 
+    description: str = None, 
+    quantity: int = 0,
+    ingredients: str = None,
+    usage_instructions: str = None,
+    suitable_age_range: str = None,
+    image_url: str = None
+) -> dict:
+    """Add new product with all available fields"""
     db = SessionLocal()
     try:
         product = Product(
             name=name,
             price=price,
             description=description,
-            category=category,
-            quantity=quantity
+            quantity=quantity,
+            ingredients=ingredients,
+            usage_instructions=usage_instructions,
+            suitable_age_range=suitable_age_range,
+            image_url=image_url
         )
         db.add(product)
         db.commit()
@@ -93,8 +246,28 @@ def add_product(name: str, price: float, description: str, category: str = None,
         db.close()
 
 @tool
-def create_order(product_id: int, quantity: int, customer_name: str) -> dict:
-    """Create order"""
+def create_order(
+    product_id: int, 
+    quantity: int, 
+    customer_name: str,
+    order_source: str = "chatbot",
+    type_of_order: str = "auto",
+    language: str = "auto"
+) -> dict:
+    """Create order with automatic B2B/B2C detection, language detection, and stock validation.
+    
+    Stock Validation:
+    - Checks if requested quantity is available in stock
+    - Returns error message if insufficient stock with current availability
+    
+    Auto-detects:
+    - 'B2C': Individual customers, small quantities (1-9 units)
+    - 'B2B': Business customers (company names) or large quantities (10+ units)
+    
+    Language auto-detection based on customer name patterns.
+    
+    Always asks user for customer name and quantity before creating order.
+    """
     db = SessionLocal()
     try:
         product = db.query(Product).filter(Product.id == product_id).first()
@@ -102,16 +275,41 @@ def create_order(product_id: int, quantity: int, customer_name: str) -> dict:
         if not product:
             return {"status": "error", "error": "Product not found"}
 
-        total_amount = float(product.price) * quantity
+        # Check if there's enough quantity in stock
+        if product.quantity < quantity:
+            return {
+                "status": "error", 
+                "error": f"Insufficient stock. We currently have {product.quantity} units of '{product.name}' available, but you requested {quantity} units. Please adjust your quantity or contact us for restocking information."
+            }
+
+        # Auto-detect B2B vs B2C if not explicitly set
+        if type_of_order == "auto":
+            type_of_order = detect_customer_type(customer_name, quantity)
+
+        # Auto-detect language if not explicitly set
+        if language == "auto":
+            language = detect_language(customer_name)
+
+        # Parse price to handle currency formatting
+        unit_price = parse_price(product.price)
+        total_amount = unit_price * quantity
+
+        # Create proper order_items structure
+        order_items_data = [{
+            "product_id": product_id,
+            "product_name": product.name,
+            "quantity": quantity,
+            "unit_price": unit_price,
+            "subtotal": total_amount
+        }]
 
         order = Order(
+            order_source=order_source,
             customer_name=customer_name,
-            order_items=[{
-                "product_id": product_id,
-                "quantity": quantity,
-                "product_name": product.name
-            }],
+            order_items=order_items_data,
             total_amount=total_amount,
+            type_of_order=type_of_order,
+            language=language,
             status="pending"
         )
 
@@ -119,7 +317,15 @@ def create_order(product_id: int, quantity: int, customer_name: str) -> dict:
         db.commit()
         db.refresh(order)
 
-        return {"status": "success", "data": {"order_id": order.id}}
+        return {
+            "status": "success", 
+            "data": {
+                "order_id": order.id,
+                "customer_type": type_of_order,
+                "detected_language": language,
+                "total_amount": total_amount
+            }
+        }
     finally:
         db.close()
 
@@ -172,6 +378,40 @@ Guidelines:
 - For B2B users: handle bulk inquiries, large quantities, and business-oriented requests professionally
 - Always prefer using available tools (get_products, add_product, create_order, get_orders) for accurate data instead of guessing
 - Never make up product or order data
+
+Product Information Available:
+- Basic details: name, description, price, quantity
+- Detailed information: ingredients, usage_instructions, suitable_age_range, image_url
+- Use these details to help customers make informed decisions
+
+Tool Usage for Product Information:
+- Use get_products() with flexible parameters based on user request:
+  * names_only=True when user asks "show me product names", "what products do you have", "list product names"
+  * fields_only=['name', 'price'] when user asks for specific details like "show names and prices"
+  * fields_only=['ingredients'] when user asks "what are the ingredients", "show ingredients"
+  * product_ids=[1,2,3] when user asks about specific products by ID
+  * include_all=True when user asks "show all details", "full information", "everything about products"
+  * Default (no parameters) returns full details for general product queries
+
+IMPORTANT: Match the tool parameters to user intent:
+- "Show me product names" → names_only=True
+- "What's the price of products" → fields_only=['name', 'price'] 
+- "Tell me about ingredients" → fields_only=['name', 'ingredients']
+- "Show all product information" → include_all=True
+- "Details about product 1" → product_ids=[1], include_all=True
+
+Order Processing Enhanced:
+- ALWAYS ask for customer name and quantity before creating any order
+- Stock validation: Automatically checks if requested quantity is available in stock
+  * If insufficient stock, informs customer of current availability
+  * Only creates order if sufficient stock exists
+- Orders automatically detect customer type (B2B vs B2C) based on:
+  * Customer name (business indicators like LLC, Corp, Inc, Company, etc.)
+  * Order quantity: 1-9 units = B2C, 10+ units = B2B
+  * Business names automatically = B2B regardless of quantity
+- Language auto-detection based on customer name patterns (en, ja, zh, ar, es, fr)
+- System provides detected customer type and language in response
+- This helps with better customer service and business analytics
 
 Order Handling Rules (VERY IMPORTANT):
 - If a user wants to place an order, ensure the following details are collected:
