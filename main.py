@@ -66,8 +66,9 @@ def extract_travel_data(text=None, base64_image=None, mime_type=None):
     Rules:
     - Extract name of person → if missing return "unknown employee"
     - Extract date → if missing return "date not present"
-    - If date belongs to current year ({current_year}) → is_traveled = true
-    - else false
+    - If date belongs to 2025 or 2026 → is_traveled = true
+    - If date is 2027 or above → is_traveled = false
+    - For any other years → is_traveled = false
     - Also want confidence score of he/she is traveled or not (0.0 to 1.0), 
       if is_traveled is true then confidence score should be 1.0 else less than 0.3
     - Flight name if present → else "flight name not present"
