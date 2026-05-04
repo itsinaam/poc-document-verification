@@ -40,6 +40,7 @@ def format_orders(orders):
             "id": o.id,
             "order_source": o.order_source,
             "customer_name": o.customer_name,
+            "country": o.location,
             "order_items": o.order_items,
             "total_amount": str(o.total_amount) if o.total_amount else None,
             "type_of_order": o.type_of_order,
@@ -143,6 +144,30 @@ def detect_language(text: str) -> str:
     
     # Default to English
     return "en"
+
+def suggest_country_from_name(customer_name: str) -> str:
+    """Suggest country based on customer name patterns for improved UX"""
+    
+    name_lower = customer_name.lower()
+    
+    # Common country indicators from names
+    country_patterns = {
+        'japan': ['yamamoto', 'tanaka', 'suzuki', 'takahashi', 'watanabe', 'sasaki', 'yamazaki', 'nakamura', 'sato', 'kato'],
+        'china': ['li', 'wang', 'zhang', 'liu', 'chen', 'yang', 'zhao', 'huang', 'zhou', 'wu'],
+        'india': ['patel', 'sharma', 'singh', 'kumar', 'gupta', 'shah', 'agarwal', 'jain', 'mehta', 'gandhi'],
+        'usa': ['smith', 'johnson', 'williams', 'brown', 'jones', 'garcia', 'miller', 'davis', 'rodriguez', 'martinez'],
+        'germany': ['mueller', 'schmidt', 'schneider', 'fischer', 'weber', 'meyer', 'wagner', 'becker', 'schulz', 'hoffmann'],
+        'france': ['martin', 'bernard', 'thomas', 'petit', 'robert', 'richard', 'durand', 'dubois', 'moreau', 'laurent'],
+        'uk': ['brown', 'wilson', 'taylor', 'davies', 'evans', 'thomas', 'roberts', 'walker', 'wright', 'robinson'],
+        'canada': ['macdonald', 'johnston', 'campbell', 'stewart', 'thomson', 'robertson', 'anderson', 'mackenzie'],
+    }
+    
+    for country, names in country_patterns.items():
+        if any(name in name_lower for name in names):
+            return country.title()
+    
+    # Default suggestion
+    return ""
 
 
 # Tools
@@ -250,6 +275,7 @@ def create_order(
     product_id: int, 
     quantity: int, 
     customer_name: str,
+    country: str,
     order_source: str = "chatbot",
     type_of_order: str = "auto",
     language: str = "auto"
@@ -266,7 +292,7 @@ def create_order(
     
     Language auto-detection based on customer name patterns.
     
-    Always asks user for customer name and quantity before creating order.
+    Always asks user for customer name, quantity, and country before creating order.
     """
     db = SessionLocal()
     try:
@@ -306,6 +332,7 @@ def create_order(
         order = Order(
             order_source=order_source,
             customer_name=customer_name,
+            location=country,
             order_items=order_items_data,
             total_amount=total_amount,
             type_of_order=type_of_order,
@@ -323,6 +350,7 @@ def create_order(
                 "order_id": order.id,
                 "customer_type": type_of_order,
                 "detected_language": language,
+                "country": country,
                 "total_amount": total_amount
             }
         }
@@ -401,7 +429,7 @@ IMPORTANT: Match the tool parameters to user intent:
 - "Details about product 1" → product_ids=[1], include_all=True
 
 Order Processing Enhanced:
-- ALWAYS ask for customer name and quantity before creating any order
+- ALWAYS ask for customer name, quantity, and country before creating any order
 - Stock validation: Automatically checks if requested quantity is available in stock
   * If insufficient stock, informs customer of current availability
   * Only creates order if sufficient stock exists
@@ -410,14 +438,16 @@ Order Processing Enhanced:
   * Order quantity: 1-9 units = B2C, 10+ units = B2B
   * Business names automatically = B2B regardless of quantity
 - Language auto-detection based on customer name patterns (en, ja, zh, ar, es, fr)
-- System provides detected customer type and language in response
-- This helps with better customer service and business analytics
+- Country information is collected for shipping and regional business analytics
+- System provides detected customer type, language, and country in response
+- This helps with better customer service, shipping logistics, and business analytics
 
 Order Handling Rules (VERY IMPORTANT):
 - If a user wants to place an order, ensure the following details are collected:
   1. Customer Name
   2. Product Name or Product ID
   3. Quantity
+  4. Country
 
 - If any of these details are missing:
   → Ask for ONLY the missing information (do not repeat everything)
@@ -430,6 +460,9 @@ Order Handling Rules (VERY IMPORTANT):
 
 - If quantity is missing:
   → Ask how many units the user wants
+
+- If country is missing:
+  → Ask which country the order should be shipped to
 
 - Do NOT proceed to create an order until all required details are available
 

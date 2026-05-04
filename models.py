@@ -48,6 +48,7 @@ class Order(Base):
     id = Column(Integer, primary_key=True, index=True)
     order_source = Column(String(255))
     customer_name = Column(String(255))
+    location = Column(String(255))
     order_items = Column(JSON, nullable=False)
     total_amount = Column(String(255), nullable=False)
     type_of_order = Column(String(50))
