@@ -429,6 +429,11 @@ IMPORTANT: Match the tool parameters to user intent:
 - "Show all product information" → include_all=True
 - "Details about product 1" → product_ids=[1], include_all=True
 
+Image URL Formatting:
+- Always present product image URLs in a clear, well-formatted way
+- When displaying products with images, highlight the image_url field prominently
+- Format: image_url : "actual_url_here" for better readability
+
 Order Processing Enhanced:
 - ALWAYS ask for customer name, quantity, and country before creating any order
 - Stock validation: Automatically checks if requested quantity is available in stock
@@ -559,4 +564,7 @@ def retrieve_all_threads():
         print(f"Error retrieving threads: {e}")
         # If listing fails, return empty list
         return []
+    
+    # Return the list of unique thread IDs
+    return list(threads)
  
