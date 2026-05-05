@@ -216,6 +216,48 @@ def get_products(
         db.close()
 
 @tool
+def check_product_by_name(product_name: str) -> dict:
+    """Check if a specific product exists in the database by name (case-insensitive, partial match).
+    
+    ALWAYS call this tool first when user asks about a specific product before proceeding with any order.
+    
+    Returns:
+    - If found: product details including id, name, price, quantity, currency, product_type
+    - If not found: status='not_found' with list of all available product names so user can choose
+    """
+    db = SessionLocal()
+    try:
+        # Case-insensitive partial match
+        products = db.query(Product).filter(
+            Product.name.ilike(f"%{product_name}%")
+        ).all()
+        
+        if products:
+            data = []
+            for p in products:
+                data.append({
+                    "id": p.id,
+                    "name": p.name,
+                    "price": p.price,
+                    "currency": p.currency,
+                    "quantity": p.quantity,
+                    "product_type": p.product_type,
+                    "description": p.description
+                })
+            return {"status": "found", "data": data}
+        else:
+            # Product not found - return all available product names
+            all_products = db.query(Product).all()
+            available = [{"id": p.id, "name": p.name} for p in all_products]
+            return {
+                "status": "not_found",
+                "message": f"Product '{product_name}' is not available in our catalog.",
+                "available_products": available
+            }
+    finally:
+        db.close()
+
+@tool
 def add_product(
     name: str, 
     price: str, 
@@ -363,7 +405,7 @@ def get_orders(customer_name: str = None) -> dict:
         db.close()
 
 
-tools = [get_products, add_product, create_order, get_orders]
+tools = [check_product_by_name, get_products, add_product, create_order, get_orders]
 
 # Bind all tools to LLM
 llm_with_tools = llm.bind_tools(tools)
@@ -408,6 +450,18 @@ When users ask about product types ("what type of product is this?", "what produ
 - Explain what the product type is used for and its benefits
 - Suggest suitable use cases based on the product_type
 - Example: "This is a skincare product, specifically designed for [purpose]. It's suitable for [use case]."
+
+PRODUCT VALIDATION FLOW (MANDATORY):
+When a user asks about or mentions a specific product by name (e.g., "I want to order X", "do you have X", "tell me about X"):
+1. FIRST call check_product_by_name(product_name="X") to verify it exists
+2. If status='found': proceed normally — show product details and continue with order flow
+3. If status='not_found': respond politely, e.g.:
+   "I'm sorry, we don't currently carry '[product name]' in our catalog.
+   Here are the products we have available for ordering:
+   [list available_products from tool response]
+   Would you like to place a bulk order for any of these?"
+- NEVER assume a product exists without calling check_product_by_name first
+- NEVER proceed to create_order for a product that was not found
 
 Tool Usage for Product Information:
 - Use get_products() with flexible parameters based on user request:
