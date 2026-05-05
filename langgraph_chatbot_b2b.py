@@ -271,10 +271,32 @@ def get_products_by_category(category: str) -> dict:
     """
     db = SessionLocal()
     try:
-        products = db.query(Product).filter(
-            Product.product_type.ilike(f"%{category}%")
-        ).all()
-        
+        # Build list of search terms to try (handle plural/singular)
+        search_terms = [category]
+        cat_lower = category.lower().strip()
+        if cat_lower.endswith('ics'):
+            search_terms.append(cat_lower[:-1])   # cosmetics -> cosmetic
+        elif cat_lower.endswith('s') and len(cat_lower) > 3:
+            search_terms.append(cat_lower[:-1])   # masks -> mask, products -> product
+        elif not cat_lower.endswith('s'):
+            search_terms.append(cat_lower + 's')  # cosmetic -> cosmetics
+
+        products = []
+        for term in search_terms:
+            results = db.query(Product).filter(
+                Product.product_type.ilike(f"%{term}%")
+            ).all()
+            products.extend(results)
+
+        # Deduplicate by product id
+        seen = set()
+        unique_products = []
+        for p in products:
+            if p.id not in seen:
+                seen.add(p.id)
+                unique_products.append(p)
+        products = unique_products
+
         if products:
             data = [
                 {
