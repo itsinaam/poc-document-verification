@@ -100,43 +100,6 @@ def parse_price(price_string: str) -> float:
     except ValueError:
         return 0.0
 
-def detect_customer_type(customer_name: str, quantity: int) -> str:
-    """Automatically detect if customer is B2B or B2C based on name and quantity"""
-    
-    # Business indicators in customer name
-    business_keywords = [
-        'llc', 'inc', 'corp', 'ltd', 'company', 'co.', 'enterprise', 'enterprises',
-        'group', 'corporation', 'incorporated', 'limited', 'business', 'store',
-        'shop', 'retail', 'wholesale', 'distribution', 'distributor', 'trading',
-        'international', 'global', 'industries', 'solutions', 'services', 'agency',
-        'firm', 'associates', 'partners', 'partnership'
-    ]
-    
-    customer_lower = customer_name.lower()
-    
-    # Check for business keywords in name
-    has_business_indicators = any(keyword in customer_lower for keyword in business_keywords)
-    
-    # Business detection logic - prioritize business name indicators
-    if has_business_indicators:
-        return "B2B"  # Business customer regardless of quantity
-    
-    # For individual names, classify based on quantity
-    if quantity >= 10:
-        return "B2B"  # Large quantities suggest business use
-    else:
-        return "B2C"  # Small quantities for individual customers
-        
-    # Additional patterns that suggest B2B:
-    # - Multiple words in business format (e.g., "ABC Beauty Supply")
-    # - All caps names (common in business names)
-    # - Names ending with numbers (branch locations)
-    words = customer_name.split()
-    if len(words) >= 3 and any(word.isupper() for word in words):
-        return "B2B"
-    
-    return "B2C"  # Default to B2C
-
 def detect_language(text: str) -> str:
     """Auto-detect language from message content using character analysis and keywords"""
     
@@ -317,16 +280,19 @@ def create_order(
         if not product:
             return {"status": "error", "error": "Product not found"}
 
+        # B2B Bulk Order Requirement Check
+        if quantity < 10:
+            return {
+                "status": "error", 
+                "error": "I am a B2B assistant. Please place orders in bulk with a minimum of 10 items."
+            }
+
         # Check if there's enough quantity in stock
         if product.quantity < quantity:
             return {
                 "status": "error", 
                 "error": f"Insufficient stock. We currently have {product.quantity} units of '{product.name}' available, but you requested {quantity} units. Please adjust your quantity or contact us for restocking information."
             }
-
-        # Auto-detect B2B vs B2C if not explicitly set
-        if type_of_order == "auto":
-            type_of_order = detect_customer_type(customer_name, quantity)
 
         # Auto-detect language if not explicitly set
         if language == "auto":
@@ -353,7 +319,7 @@ def create_order(
             location=country,
             order_items=order_items_data,
             total_amount=total_amount,
-            type_of_order=type_of_order,
+            type_of_order="B2B",
             language=language,
             currency=product.currency,
             status="pending"
@@ -413,16 +379,20 @@ class ChatState(TypedDict):
 # -------------------
 
 SYSTEM_PROMPT = """
-You are an AI-powered sales assistant for Empro, specializing in Cosmetics and Skincare products.
+You are an AI-powered B2B sales assistant for Empro, specializing in Cosmetics and Skincare products for business clients, bulk orders, and resellers.
 
-Your role is to handle both B2B (business clients, bulk orders, resellers) and B2C (individual customers) interactions professionally and efficiently.
+Your role is to handle ONLY B2B (business clients, bulk orders, resellers) interactions professionally and efficiently.
+
+IMPORTANT B2B REQUIREMENT:
+- This is a B2B assistant - ALL orders must be in bulk quantities (minimum 10 items)
+- If a user tries to order less than 10 items, politely inform them: "I am a B2B assistant. Please place orders in bulk with a minimum of 10 items."
+- Do NOT process any orders with quantities less than 10 items
 
 Guidelines:
 - Maintain a polite, professional, and helpful tone at all times
 - Keep responses concise and to the point (avoid long explanations)
-- Understand user intent clearly and guide them through product selection and ordering
-- For B2C users: assist with product details, pricing, and simple orders
-- For B2B users: handle bulk inquiries, large quantities, and business-oriented requests professionally
+- Understand user intent clearly and guide them through product selection and bulk ordering
+- Handle bulk inquiries, large quantities, and business-oriented requests professionally
 - Always prefer using available tools (get_products, add_product, create_order, get_orders) for accurate data instead of guessing
 - Never make up product or order data
 

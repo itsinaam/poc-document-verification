@@ -4,7 +4,8 @@ from langchain_core.messages import HumanMessage
 from models import History
 from database import SessionLocal
 from sqlalchemy.orm import Session
-from langgraph_chatbot import chatbot, retrieve_all_threads
+from langgraph_chatbot_b2b import chatbot, retrieve_all_threads
+from langgraph_chatbot_b2c import chatbot as chatbot_b2c , retrieve_all_threads as retrieve_all_threads_b2c
 
 router = APIRouter()
 
@@ -22,7 +23,9 @@ def get_db():
     finally:
         db.close()
 
-@router.post("/api/chat")
+#-------------- B2B Endpoint -------------------------
+
+@router.post("/api/chat/b2b")
 def chat_with_bot(request: ChatRequest, db: Session = Depends(get_db)):
     try:
         input_state = {
@@ -63,12 +66,58 @@ def chat_with_bot(request: ChatRequest, db: Session = Depends(get_db)):
             "error": str(e)
         }
 
+#-------------- B2C Endpoint -------------------------
+@router.post("/api/chat/b2c")
+def chat_with_bot(request: ChatRequest, db: Session = Depends(get_db)):
+    try:
+        input_state = {
+            "messages": [HumanMessage(content=request.message)]
+        }
+
+        config = {
+            "configurable": {
+                "thread_id": request.thread_id
+            }
+        }
+
+        # Run chatbot
+        result = chatbot_b2c.invoke(input_state, config=config)
+
+        messages = result["messages"]
+        last_message = messages[-1]
+        bot_response = last_message.content
+
+        # ✅ SAVE INTO DB
+        history = History(
+            thread_id=request.thread_id,
+            message=request.message,
+            response=bot_response
+        )
+
+        db.add(history)
+        db.commit()
+        db.refresh(history)
+
+        return {
+            "response": bot_response,
+            "thread_id": request.thread_id
+        }
+
+    except Exception as e:
+        return {
+            "error": str(e)
+        }
+
 #list threads
 @router.get("/api/threads")
 def get_threads(db: Session = Depends(get_db)):
     try:
-        # Get all unique thread IDs
-        thread_ids = retrieve_all_threads()
+        # Get all unique thread IDs from both B2B and B2C chatbots
+        thread_ids_b2b = retrieve_all_threads()
+        thread_ids_b2c = retrieve_all_threads_b2c()
+        
+        # Combine and remove duplicates
+        thread_ids = list(set(thread_ids_b2b + thread_ids_b2c))
         
         threads_with_messages = []
         
