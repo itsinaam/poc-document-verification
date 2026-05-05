@@ -35,22 +35,47 @@ def calculate_order_summary(orders):
 
 def format_orders(orders):
     data = []
+    db = SessionLocal()
+    
+    try:
+        for o in orders:
+            # Enhanced order items with product details
+            enhanced_order_items = []
+            if o.order_items:
+                for item in o.order_items:
+                    # Fetch product details for each item
+                    product_id = item.get('product_id')
+                    if product_id:
+                        product = db.query(Product).filter(Product.id == product_id).first()
+                        if product:
+                            enhanced_item = {
+                                **item,  # Keep original item data
+                                "product_type": product.product_type,
+                                "product_currency": product.currency
+                            }
+                            enhanced_order_items.append(enhanced_item)
+                        else:
+                            enhanced_order_items.append(item)
+                    else:
+                        enhanced_order_items.append(item)
 
-    for o in orders:
-        data.append({
-            "id": o.id,
-            "order_source": o.order_source,
-            "customer_name": o.customer_name,
-            "country": o.location,
-            "order_items": o.order_items,
-            "total_amount": str(o.total_amount) if o.total_amount else None,
-            "type_of_order": o.type_of_order,
-            "language": o.language,
-            "status": o.status,
-            "order_date": o.order_date.strftime("%Y-%m-%d %H:%M:%S") if o.order_date else None,
-            "created_at": o.created_at.strftime("%Y-%m-%d %H:%M:%S"),
-            "updated_at": o.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
-        })
+            data.append({
+                "id": o.id,
+                "order_source": o.order_source,
+                "customer_name": o.customer_name,
+                "country": o.location,
+                "order_items": enhanced_order_items,
+                "total_amount": str(o.total_amount) if o.total_amount else None,
+                "order_currency": o.currency,  # Show order's currency
+                "type_of_order": o.type_of_order,
+                "language": o.language,
+                "status": o.status,
+                "order_date": o.order_date.strftime("%Y-%m-%d %H:%M:%S") if o.order_date else None,
+                "created_at": o.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                "updated_at": o.updated_at.strftime("%Y-%m-%d %H:%M:%S"),
+            })
+    finally:
+        db.close()
 
     return data
 
@@ -113,63 +138,49 @@ def detect_customer_type(customer_name: str, quantity: int) -> str:
     return "B2C"  # Default to B2C
 
 def detect_language(text: str) -> str:
-    """Auto-detect language from customer name or text"""
+    """Auto-detect language from message content using character analysis and keywords"""
     
-    # Simple language detection based on common patterns
+    import re
+    
+    # Check for Chinese characters (CJK Unified Ideographs)
+    if re.search(r'[\u4e00-\u9fff]', text):
+        return "Chinese"
+    
+    # Check for Japanese characters (Hiragana, Katakana, Kanji)
+    if re.search(r'[\u3040-\u309f\u30a0-\u30ff\u4e00-\u9faf]', text):
+        # If has Chinese characters but also Japanese specific characters
+        if re.search(r'[\u3040-\u309f\u30a0-\u30ff]', text):
+            return "Japanese"
+    
+    # Check for Arabic characters
+    if re.search(r'[\u0600-\u06ff\u0750-\u077f\u08a0-\u08ff\ufb50-\ufdff\ufe70-\ufeff]', text):
+        return "Arabic"
+    
+    # Check for common language keywords and patterns
     text_lower = text.lower()
     
-    # Check for Japanese characters or names
-    japanese_indicators = ['san', 'kun', 'chan', 'sama', 'tokyo', 'osaka', 'kyoto', 'honda', 'yamaha', 'suzuki']
-    if any(indicator in text_lower for indicator in japanese_indicators):
-        return "ja"
+    # Spanish keywords and patterns
+    spanish_keywords = ['hola', 'gracias', 'por favor', 'sí', 'no', 'cómo', 'qué', 'donde', 'cuando', 'precio', 'producto']
+    if any(keyword in text_lower for keyword in spanish_keywords):
+        return "Spanish"
     
-    # Check for Chinese indicators
-    chinese_indicators = ['li', 'wang', 'zhang', 'liu', 'chen', 'yang', 'beijing', 'shanghai']
-    if any(indicator in text_lower for indicator in chinese_indicators):
-        return "zh"
+    # French keywords and patterns  
+    french_keywords = ['bonjour', 'merci', 's\'il vous plaît', 'oui', 'non', 'comment', 'quoi', 'où', 'quand', 'prix', 'produit']
+    if any(keyword in text_lower for keyword in french_keywords):
+        return "French"
     
-    # Check for Arabic indicators
-    arabic_indicators = ['mohammed', 'ahmad', 'hassan', 'ali', 'omar', 'fatima', 'aisha']
-    if any(indicator in text_lower for indicator in arabic_indicators):
-        return "ar"
+    # German keywords
+    german_keywords = ['hallo', 'danke', 'bitte', 'ja', 'nein', 'wie', 'was', 'wo', 'wann', 'preis', 'produkt']
+    if any(keyword in text_lower for keyword in german_keywords):
+        return "German"
     
-    # Check for Spanish indicators
-    spanish_indicators = ['carlos', 'maria', 'jose', 'luis', 'ana', 'juan', 'pedro']
-    if any(indicator in text_lower for indicator in spanish_indicators):
-        return "es"
-    
-    # Check for French indicators
-    french_indicators = ['jean', 'marie', 'pierre', 'jacques', 'françois', 'michel']
-    if any(indicator in text_lower for indicator in french_indicators):
-        return "fr"
+    # Japanese romanized keywords
+    japanese_keywords = ['arigatou', 'sumimasen', 'konnichiwa', 'sayonara', 'ikura', 'nani', 'doko']
+    if any(keyword in text_lower for keyword in japanese_keywords):
+        return "Japanese"
     
     # Default to English
-    return "en"
-
-def suggest_country_from_name(customer_name: str) -> str:
-    """Suggest country based on customer name patterns for improved UX"""
-    
-    name_lower = customer_name.lower()
-    
-    # Common country indicators from names
-    country_patterns = {
-        'japan': ['yamamoto', 'tanaka', 'suzuki', 'takahashi', 'watanabe', 'sasaki', 'yamazaki', 'nakamura', 'sato', 'kato'],
-        'china': ['li', 'wang', 'zhang', 'liu', 'chen', 'yang', 'zhao', 'huang', 'zhou', 'wu'],
-        'india': ['patel', 'sharma', 'singh', 'kumar', 'gupta', 'shah', 'agarwal', 'jain', 'mehta', 'gandhi'],
-        'usa': ['smith', 'johnson', 'williams', 'brown', 'jones', 'garcia', 'miller', 'davis', 'rodriguez', 'martinez'],
-        'germany': ['mueller', 'schmidt', 'schneider', 'fischer', 'weber', 'meyer', 'wagner', 'becker', 'schulz', 'hoffmann'],
-        'france': ['martin', 'bernard', 'thomas', 'petit', 'robert', 'richard', 'durand', 'dubois', 'moreau', 'laurent'],
-        'uk': ['brown', 'wilson', 'taylor', 'davies', 'evans', 'thomas', 'roberts', 'walker', 'wright', 'robinson'],
-        'canada': ['macdonald', 'johnston', 'campbell', 'stewart', 'thomson', 'robertson', 'anderson', 'mackenzie'],
-    }
-    
-    for country, names in country_patterns.items():
-        if any(name in name_lower for name in names):
-            return country.title()
-    
-    # Default suggestion
-    return ""
-
+    return "English"
 
 # Tools
 @tool
@@ -227,6 +238,8 @@ def get_products(
                 "name": p.name,
                 "price": p.price,
                 "description": p.description,
+                "currency": p.currency,
+                "product_type": p.product_type,
                 "quantity": p.quantity,
                 "ingredients": p.ingredients,
                 "usage_instructions": p.usage_instructions,
@@ -277,6 +290,7 @@ def create_order(
     quantity: int, 
     customer_name: str,
     country: str,
+    user_message: str = "",
     order_source: str = "chatbot",
     type_of_order: str = "auto",
     language: str = "auto"
@@ -291,9 +305,10 @@ def create_order(
     - 'B2C': Individual customers, small quantities (1-9 units)
     - 'B2B': Business customers (company names) or large quantities (10+ units)
     
-    Language auto-detection based on customer name patterns.
+    Language auto-detection based on user's message content (returns full language names: Chinese, Japanese, Arabic, Spanish, French, German, English).
     
     Always asks user for customer name, quantity, and country before creating order.
+    Include user_message parameter to detect language from actual message content.
     """
     db = SessionLocal()
     try:
@@ -315,7 +330,9 @@ def create_order(
 
         # Auto-detect language if not explicitly set
         if language == "auto":
-            language = detect_language(customer_name)
+            # Use user message for language detection, fallback to customer name if message is empty
+            detection_text = user_message if user_message.strip() else customer_name
+            language = detect_language(detection_text)
 
         # Parse price to handle currency formatting
         unit_price = parse_price(product.price)
@@ -338,6 +355,7 @@ def create_order(
             total_amount=total_amount,
             type_of_order=type_of_order,
             language=language,
+            currency=product.currency,
             status="pending"
         )
 
@@ -409,15 +427,25 @@ Guidelines:
 - Never make up product or order data
 
 Product Information Available:
-- Basic details: name, description, price, quantity
+- Basic details: name, description, price, quantity, currency
+- Product classification: product_type (categories like skincare, cosmetics, haircare, etc.)
 - Detailed information: ingredients, usage_instructions, suitable_age_range, image_url
 - Use these details to help customers make informed decisions
+
+Product Type Guidance:
+When users ask about product types ("what type of product is this?", "what products do you have for skincare?", "show me cosmetic products"), use the product_type field to provide helpful information:
+- Clearly identify the product category (skincare, cosmetics, haircare, etc.)
+- Explain what the product type is used for and its benefits
+- Suggest suitable use cases based on the product_type
+- Example: "This is a skincare product, specifically designed for [purpose]. It's suitable for [use case]."
 
 Tool Usage for Product Information:
 - Use get_products() with flexible parameters based on user request:
   * names_only=True when user asks "show me product names", "what products do you have", "list product names"
   * fields_only=['name', 'price'] when user asks for specific details like "show names and prices"
+  * fields_only=['name', 'product_type'] when user asks "what types of products do you have", "show product categories"
   * fields_only=['ingredients'] when user asks "what are the ingredients", "show ingredients"
+  * fields_only=['name', 'product_type', 'usage_instructions'] when user asks about product types and usage
   * product_ids=[1,2,3] when user asks about specific products by ID
   * include_all=True when user asks "show all details", "full information", "everything about products"
   * Default (no parameters) returns full details for general product queries
@@ -425,6 +453,8 @@ Tool Usage for Product Information:
 IMPORTANT: Match the tool parameters to user intent:
 - "Show me product names" → names_only=True
 - "What's the price of products" → fields_only=['name', 'price'] 
+- "What types of products do you have" → fields_only=['name', 'product_type']
+- "Tell me about product categories" → fields_only=['name', 'product_type', 'usage_instructions']
 - "Tell me about ingredients" → fields_only=['name', 'ingredients']
 - "Show all product information" → include_all=True
 - "Details about product 1" → product_ids=[1], include_all=True
@@ -443,7 +473,7 @@ Order Processing Enhanced:
   * Customer name (business indicators like LLC, Corp, Inc, Company, etc.)
   * Order quantity: 1-9 units = B2C, 10+ units = B2B
   * Business names automatically = B2B regardless of quantity
-- Language auto-detection based on customer name patterns (en, ja, zh, ar, es, fr)
+- Language auto-detection based on user's message content and character analysis (English, Japanese, Chinese, Arabic, Spanish, French, German)
 - Country information is collected for shipping and regional business analytics
 - System provides detected customer type, language, and country in response
 - This helps with better customer service, shipping logistics, and business analytics
@@ -471,6 +501,8 @@ Order Handling Rules (VERY IMPORTANT):
   → Ask which country the order should be shipped to
 
 - Do NOT proceed to create an order until all required details are available
+
+- When calling create_order function, ALWAYS include the user_message parameter with the original user's message for accurate language detection
 
 Behavior:
 - Act as a 24/7 global sales assistant capable of handling multiple customers

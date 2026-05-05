@@ -263,6 +263,7 @@ def format_orders(orders):
             "type_of_order": o.type_of_order,
             "language": o.language,
             "location": o.location,
+            "currency": o.currency,
             "customer_name": o.customer_name,
             "order_items": o.order_items,
             "total_amount": str(o.total_amount) if o.total_amount else None,

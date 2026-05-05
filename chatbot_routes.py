@@ -65,10 +65,44 @@ def chat_with_bot(request: ChatRequest, db: Session = Depends(get_db)):
 
 #list threads
 @router.get("/api/threads")
-def get_threads():
-    return {
-        "threads": retrieve_all_threads()
-    }
+def get_threads(db: Session = Depends(get_db)):
+    try:
+        # Get all unique thread IDs
+        thread_ids = retrieve_all_threads()
+        
+        threads_with_messages = []
+        
+        for thread_id in thread_ids:
+            # Get the latest message for this thread
+            latest_record = (
+                db.query(History)
+                .filter(History.thread_id == thread_id)
+                .order_by(History.timestamp.desc())
+                .first()
+            )
+            
+            if latest_record:
+                # Use the user's message as the thread preview
+                threads_with_messages.append({
+                    "thread_id": thread_id,
+                    "message": latest_record.message
+                })
+            else:
+                # If no history found, use a default message
+                threads_with_messages.append({
+                    "thread_id": thread_id,
+                    "message": "No messages yet"
+                })
+        
+        return {
+            "threads": threads_with_messages
+        }
+        
+    except Exception as e:
+        return {
+            "error": str(e),
+            "threads": []
+        }
 
 @router.get("/api/chat/history/{thread_id}")
 def get_chat_history(thread_id: str, db: Session = Depends(get_db)):
