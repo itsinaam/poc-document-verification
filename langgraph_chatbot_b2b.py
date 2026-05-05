@@ -258,6 +258,48 @@ def check_product_by_name(product_name: str) -> dict:
         db.close()
 
 @tool
+def get_products_by_category(category: str) -> dict:
+    """Get products filtered by product_type/category (e.g. skincare, cosmetics, face mask, haircare).
+    
+    Use this when user asks about a specific category like:
+    - "show me skincare products"
+    - "I want cosmetics"
+    - "do you have face masks?"
+    
+    Returns product name and image_url for each matching product.
+    Case-insensitive partial match on product_type field.
+    """
+    db = SessionLocal()
+    try:
+        products = db.query(Product).filter(
+            Product.product_type.ilike(f"%{category}%")
+        ).all()
+        
+        if products:
+            data = [
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "price": p.price,
+                    "currency": p.currency,
+                    "image_url": p.image_url,
+                    "product_type": p.product_type
+                }
+                for p in products
+            ]
+            return {"status": "found", "category": category, "data": data}
+        else:
+            all_types = db.query(Product.product_type).distinct().all()
+            types_list = [t[0] for t in all_types if t[0]]
+            return {
+                "status": "not_found",
+                "message": f"No products found for category '{category}'.",
+                "available_categories": types_list
+            }
+    finally:
+        db.close()
+
+@tool
 def add_product(
     name: str, 
     price: str, 
@@ -372,13 +414,17 @@ def create_order(
         db.refresh(order)
 
         return {
-            "status": "success", 
+            "status": "success",
             "data": {
                 "order_id": order.id,
-                "customer_type": type_of_order,
-                "detected_language": language,
+                "product_name": product.name,
+                "image_url": product.image_url,
+                "unit_price": f"{unit_price} {product.currency}",
+                "total_amount": f"{total_amount} {product.currency}",
+                "quantity": quantity,
+                "customer_name": customer_name,
                 "country": country,
-                "total_amount": total_amount
+                "detected_language": language
             }
         }
     finally:
@@ -405,7 +451,7 @@ def get_orders(customer_name: str = None) -> dict:
         db.close()
 
 
-tools = [check_product_by_name, get_products, add_product, create_order, get_orders]
+tools = [check_product_by_name, get_products_by_category, get_products, add_product, create_order, get_orders]
 
 # Bind all tools to LLM
 llm_with_tools = llm.bind_tools(tools)
@@ -450,6 +496,15 @@ When users ask about product types ("what type of product is this?", "what produ
 - Explain what the product type is used for and its benefits
 - Suggest suitable use cases based on the product_type
 - Example: "This is a skincare product, specifically designed for [purpose]. It's suitable for [use case]."
+
+CATEGORY BROWSING (MANDATORY):
+When user asks about a category (e.g., "skincare", "cosmetics", "face mask", "haircare", "I want skincare products"):
+1. Call get_products_by_category(category="skincare") — use the category keyword from user's message
+2. If status='found': display each product as:
+   - **[Product Name]**
+   - Image: [image_url]
+   - Price: [price] [currency]
+3. If status='not_found': politely list available_categories and ask user to choose
 
 PRODUCT VALIDATION FLOW (MANDATORY):
 When a user asks about or mentions a specific product by name (e.g., "I want to order X", "do you have X", "tell me about X"):
@@ -502,31 +557,26 @@ Order Processing Enhanced:
 - System provides detected customer type, language, and country in response
 - This helps with better customer service, shipping logistics, and business analytics
 
-Order Handling Rules (VERY IMPORTANT):
-- If a user wants to place an order, ensure the following details are collected:
+Order Handling Rules (VERY IMPORTANT — B2B):
+- If a user wants to place an order, collect these details ONE AT A TIME if missing:
   1. Customer Name
-  2. Product Name or Product ID
-  3. Quantity
-  4. Country
+  2. Product Name or Product ID (verify with check_product_by_name first)
+  3. Quantity (minimum 10 for B2B)
+  4. Country/Location
 
-- If any of these details are missing:
-  → Ask for ONLY the missing information (do not repeat everything)
+- Ask for ONLY the missing information — do not repeat all questions at once
+- Do NOT proceed to create_order until all 4 details are available
+- When calling create_order, ALWAYS include user_message for language detection
 
-- If customer name is missing:
-  → Politely ask for the customer's name
+After Order Success — respond with this SHORT format ONLY:
+✅ Order Confirmed!
+- **Product:** [product_name]
+- **Image:** [image_url]
+- **Price:** [unit_price]
+- **Total:** [total_amount] (qty: [quantity])
+- **Customer:** [customer_name] | [country]
 
-- If product is not specified:
-  → Ask which product they want (you may suggest available products using tools)
-
-- If quantity is missing:
-  → Ask how many units the user wants
-
-- If country is missing:
-  → Ask which country the order should be shipped to
-
-- Do NOT proceed to create an order until all required details are available
-
-- When calling create_order function, ALWAYS include the user_message parameter with the original user's message for accurate language detection
+Thank you for your bulk order! We'll process it shortly.
 
 Behavior:
 - Act as a 24/7 global sales assistant capable of handling multiple customers
