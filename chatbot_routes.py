@@ -181,12 +181,22 @@ def get_chat_history(thread_id: str, db: Session = Depends(get_db)):
                 "messages": []
             }
 
-        # Format response
+        # Format response with parsed AI responses if possible
+        import json, re
         chat_history = []
         for item in records:
+            raw_ai_response = item.response
+            parsed_ai_response = raw_ai_response
+            try:
+                clean = raw_ai_response.strip()
+                if clean.startswith("```"):
+                    clean = re.sub(r'^```[a-z]*\n?', '', clean).rstrip('`').strip()
+                parsed_ai_response = json.loads(clean)
+            except Exception:
+                parsed_ai_response = raw_ai_response  # fallback as string
             chat_history.append({
                 "user_message": item.message,
-                "ai_response": item.response,
+                "ai_response": parsed_ai_response,
                 "timestamp": item.timestamp
             })
 
