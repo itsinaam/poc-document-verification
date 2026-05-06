@@ -1,0 +1,77 @@
+[
+  {
+    "name": "ALCO CUT Enzyme Technology 4S/BOX",
+    "price": "44.00",
+    "currency": "RM",
+    "product_type": "cosmetic",
+    "quantity": 10000,
+    "image_url": "https://cdn.store-assets.com/s/654629/i/85921994.jpeg"
+  },
+  {
+    "name": "SpaceLift Face Booster Travel Kit (10ml)",
+    "price": "88.00",
+    "currency": "RM",
+    "product_type": "skincare",
+    "quantity": 10000,
+    "image_url": "https://cdn.store-assets.com/s/654629/i/82202056.jpeg"
+  },
+  {
+    "name": "MIOS EYEBROW PENCIL",
+    "price": "29.90",
+    "currency": "RM",
+    "product_type": "cosmetic",
+    "quantity": 10000,
+    "image_url": "https://cdn.store-assets.com/s/654629/i/77354666.jpeg"
+  },
+  {
+    "name": "SpaceLift Face Booster 30ml",
+    "price": "159.00",
+    "currency": "RM",
+    "product_type": "skincare",
+    "quantity": 10000,
+    "image_url": "https://cdn.store-assets.com/s/654629/i/64486567.jpeg"
+  },
+  {
+    "name": "Empro TUX Series Surgical Copper Oxide Face Mask",
+    "price": "35.00",
+    "currency": "RM",
+    "product_type": "face mask",
+    "quantity": 10000,
+    "image_url": "https://cdn.store-assets.com/s/654629/i/87041602.jpeg"
+    
+  },
+  {
+    "name": "Empro KF99 Couple Series ASTM Level 3 (Premuim Grade] (4PLY) {10s/Pack}",
+    "price": "15.00",
+    "currency": "RM",
+    "product_type": "face mask",
+    "quantity": 10000,
+    "image_url": "https://cdn.store-assets.com/s/654629/i/53476583.jpeg"
+    
+  },
+  {
+    "name": "EMPRO COPPER OXIDE MASK",
+    "price": "30.00",
+    "currency": "RM",
+    "product_type": "face mask",
+    "quantity": 10000,
+    "image_url": "https://cdn.store-assets.com/s/654629/i/44619611.jpg"
+    
+  },
+  {
+    "name": "SpaceLift Face Booster 100ml",
+    "price": "399.00",
+    "currency": "RM",
+    "product_type": "skin care",
+    "quantity": 10000,
+    "image_url": "https://cdn.store-assets.com/s/654629/i/64486460.jpeg"
+  },
+  {
+    "name": "EMPRO RED EDITION TRIANGULAR BROW PENCIL",
+    "price": "62.00",
+    "currency": "RM",
+    "product_type": "cosmetic",
+    "quantity": 10000,
+    "image_url": "https://cdn.store-assets.com/s/654629/i/75670105.jpeg"
+  }
+]
