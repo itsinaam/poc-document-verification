@@ -242,7 +242,7 @@ def create_product(db, product_data: ProductCreate):
 
 def get_all_orders(db):
     return db.query(Order) \
-             .order_by(Order.created_at.desc()) \
+             .order_by(Order.id.desc()) \
              .all()
 
 def calculate_order_summary(orders):
