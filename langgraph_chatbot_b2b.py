@@ -22,7 +22,7 @@ load_dotenv()
 DATABASE_URL = os.getenv("PSYCOPG_DATABASE_URL")
 
 
-llm = ChatOpenAI()
+llm = ChatOpenAI(model="gpt-4o")
 
 
 def calculate_order_summary(orders):
@@ -220,18 +220,45 @@ def check_product_by_name(product_name: str) -> dict:
     """Check if a specific product exists in the database by name (case-insensitive, partial match).
     
     ALWAYS call this tool first when user asks about a specific product before proceeding with any order.
+    Handles plurals, compound words (e.g. 'facemasks' -> 'face mask'), and partial matches.
     
     Returns:
     - If found: product details including id, name, price, quantity, currency, product_type
     - If not found: status='not_found' with list of all available product names so user can choose
     """
+    import re
     db = SessionLocal()
     try:
-        # Case-insensitive partial match
-        products = db.query(Product).filter(
-            Product.name.ilike(f"%{product_name}%")
-        ).all()
-        
+        def _search(term: str):
+            return db.query(Product).filter(
+                Product.name.ilike(f"%{term}%")
+            ).all()
+
+        # 1. Try exact partial match first
+        products = _search(product_name)
+
+        # 2. If not found, try splitting into words and search each word
+        if not products:
+            # Normalise: insert space before uppercase runs and split on non-alpha
+            normalised = re.sub(r'([a-z])([A-Z])', r'\1 \2', product_name)
+            words = re.split(r'[\s_\-]+', normalised.strip())
+            # Also try stripping trailing 's' for plurals (e.g. facemasks -> facemask)
+            search_terms = set()
+            for w in words:
+                if len(w) >= 3:
+                    search_terms.add(w)
+                    if w.lower().endswith('s') and len(w) > 3:
+                        search_terms.add(w[:-1])   # remove trailing 's'
+                    if w.lower().endswith('es') and len(w) > 4:
+                        search_terms.add(w[:-2])   # remove trailing 'es'
+
+            seen_ids = set()
+            for term in search_terms:
+                for p in _search(term):
+                    if p.id not in seen_ids:
+                        seen_ids.add(p.id)
+                        products.append(p)
+
         if products:
             data = []
             for p in products:
@@ -386,20 +413,6 @@ def create_order(
         if not product:
             return {"status": "error", "error": "Product not found"}
 
-        # B2B Bulk Order Requirement Check
-        if quantity < 10:
-            return {
-                "status": "error", 
-                "error": "I am a B2B assistant. Please place orders in bulk with a minimum of 10 items."
-            }
-
-        # Check if there's enough quantity in stock
-        if product.quantity < quantity:
-            return {
-                "status": "error", 
-                "error": f"Insufficient stock. We currently have {product.quantity} units of '{product.name}' available, but you requested {quantity} units. Please adjust your quantity or contact us for restocking information."
-            }
-
         # Auto-detect language if not explicitly set
         if language == "auto":
             # Use user message for language detection, fallback to customer name if message is empty
@@ -453,6 +466,119 @@ def create_order(
         db.close()
 
 @tool
+def create_multi_product_order(
+    products: list,
+    customer_name: str,
+    country: str,
+    user_message: str = "",
+    order_source: str = "chatbot"
+) -> dict:
+    """Create a single order containing MULTIPLE products at once.
+
+    Use this tool when the user wants to order more than one product in a single request.
+    This is the preferred tool for multi-product orders — do NOT call create_order multiple times.
+
+    Parameters:
+    - products: list of dicts, each with keys:
+        - product_id (int): the product's database ID
+        - quantity (int): how many units
+    - customer_name: customer / company name
+    - country: delivery country
+    - user_message: original user message (used for language detection)
+    - order_source: origin of the order (default: 'chatbot')
+
+    Example:
+        create_multi_product_order(
+            products=[{"product_id": 3, "quantity": 200}, {"product_id": 8, "quantity": 100}, {"product_id": 5, "quantity": 50}],
+            customer_name="Umer",
+            country="France"
+        )
+    """
+    db = SessionLocal()
+    try:
+        if not products:
+            return {"status": "error", "error": "No products provided"}
+
+        # Detect language
+        detection_text = user_message.strip() if user_message.strip() else customer_name
+        language = detect_language(detection_text)
+
+        order_items_data = []
+        total_amount = 0.0
+        order_currency = None
+        response_products = []
+
+        for item in products:
+            product_id = item.get("product_id")
+            quantity = item.get("quantity", 1)
+
+            if not product_id:
+                return {"status": "error", "error": f"Missing product_id in item: {item}"}
+
+            product = db.query(Product).filter(Product.id == product_id).first()
+            if not product:
+                return {"status": "error", "error": f"Product with id {product_id} not found"}
+
+            unit_price = parse_price(product.price)
+            subtotal = unit_price * quantity
+            total_amount += subtotal
+
+            if order_currency is None:
+                order_currency = product.currency
+
+            order_items_data.append({
+                "product_id": product_id,
+                "product_name": product.name,
+                "quantity": quantity,
+                "unit_price": unit_price,
+                "subtotal": subtotal
+            })
+
+            response_products.append({
+                "sku": str(product.id),
+                "name": product.name,
+                "quantity": quantity,
+                "availability": "In Stock",
+                "price_bulk": unit_price,
+                "image": product.image_url
+            })
+
+        order = Order(
+            order_source=order_source,
+            customer_name=customer_name,
+            location=country,
+            order_items=order_items_data,
+            total_amount=total_amount,
+            type_of_order="B2B",
+            language=language,
+            currency=order_currency,
+            status="pending"
+        )
+
+        db.add(order)
+        db.commit()
+        db.refresh(order)
+
+        return {
+            "status": "success",
+            "order_id": order.id,
+            "customer_name": customer_name,
+            "location": country,
+            "detected_language": language,
+            "order_summary": {
+                "total_products": len(response_products),
+                "total_quantity": sum(p["quantity"] for p in response_products),
+                "total_price": total_amount,
+                "currency": order_currency
+            },
+            "products": response_products,
+            "status_message": "Order Created Successfully"
+        }
+    finally:
+        db.close()
+
+
+@tool
 def get_orders(customer_name: str = None) -> dict:
     """Get orders"""
     db = SessionLocal()
@@ -462,7 +588,7 @@ def get_orders(customer_name: str = None) -> dict:
         if customer_name:
             query = query.filter(Order.customer_name == customer_name)
 
-        orders = query.order_by(Order.created_at.desc()).all()
+        orders = query.order_by(Order.id.desc()).all()
 
         return {
             "status": "success",
@@ -473,7 +599,7 @@ def get_orders(customer_name: str = None) -> dict:
         db.close()
 
 
-tools = [check_product_by_name, get_products_by_category, get_products, add_product, create_order, get_orders]
+tools = [check_product_by_name, get_products_by_category, get_products, add_product, create_order, create_multi_product_order, get_orders]
 
 # Bind all tools to LLM
 llm_with_tools = llm.bind_tools(tools)
@@ -489,140 +615,228 @@ class ChatState(TypedDict):
 # -------------------
 
 SYSTEM_PROMPT = """
-You are an AI-powered B2B sales assistant for Empro, specializing in Cosmetics and Skincare products for business clients, bulk orders, and resellers.
+You are an AI assistant for a B2B e-commerce system.
 
-Your role is to handle ONLY B2B (business clients, bulk orders, resellers) interactions professionally and efficiently.
+Your job is to help users browse products, understand product details, and create bulk orders efficiently.
 
-IMPORTANT B2B REQUIREMENT:
-- This is a B2B assistant - ALL orders must be in bulk quantities (minimum 10 items)
-- If a user tries to order less than 10 items, politely inform them: "I am a B2B assistant. Please place orders in bulk with a minimum of 10 items."
-- Do NOT process any orders with quantities less than 10 items
+---
 
-Guidelines:
-- Maintain a polite, professional, and helpful tone at all times
-- Keep responses concise and to the point (avoid long explanations)
-- Understand user intent clearly and guide them through product selection and bulk ordering
-- Handle bulk inquiries, large quantities, and business-oriented requests professionally
-- Always prefer using available tools (get_products, add_product, create_order, get_orders) for accurate data instead of guessing
-- Never make up product or order data
+## 🌍 LANGUAGE DETECTION & RESPONSE
 
-Product Information Available:
-- Basic details: name, description, price, quantity, currency
-- Product classification: product_type (categories like skincare, cosmetics, haircare, etc.)
-- Detailed information: ingredients, usage_instructions, suitable_age_range, image_url
-- Use these details to help customers make informed decisions
+1. ALWAYS detect the language from the **most recent / current user message** only.
+   - IGNORE the language of previous messages in the conversation history.
+   - If the user switches language mid-conversation, switch your response language immediately.
+2. Respond ONLY in the language of the CURRENT message.
+3. Translate all text into that language including:
+   * Your explanations
+   * Confirmation messages
+   * Error messages
+   * Product names in the final JSON response (translate from English to user's language)
+   * Availability status ("In Stock" → "Auf Lager" for German, "En Stock" for French, etc.)
+   * The "message" field in order response JSON
+4. Never mix multiple languages in one response.
+5. NEVER assume language from context or history — re-detect on every message.
 
-Product Type Guidance:
-When users ask about product types ("what type of product is this?", "what products do you have for skincare?", "show me cosmetic products"), use the product_type field to provide helpful information:
-- Clearly identify the product category (skincare, cosmetics, haircare, etc.)
-- Explain what the product type is used for and its benefits
-- Suggest suitable use cases based on the product_type
-- Example: "This is a skincare product, specifically designed for [purpose]. It's suitable for [use case]."
+---
 
-CATEGORY BROWSING (MANDATORY):
-When user asks about a category (e.g., "skincare", "cosmetics", "face mask", "haircare", "I want skincare products", "I want to order face mask"):
-1. Call get_products_by_category(category="...") — extract the category keyword from user's message
-2. If status='found': display each product in this EXACT format:
+## 🧠 INTENT UNDERSTANDING
 
-   **[Product Name]**
-   ![View Image]([image_url])
-   Price: [price] [currency]
+Carefully understand user intent. Main intents include:
 
-3. If status='not_found': politely list available_categories and ask user to choose
+* Create / Book / Place Order
+* Add Products to Order
+* Browse Products
+* Ask Product Details
 
-Image URL Formatting Rule:
-- ALWAYS render image URLs as markdown images: ![View Image](url)
-- NEVER show raw URLs as plain text
-- Apply this to ALL product displays, not just category browsing
+If user uses words like:
+"order", "book", "purchase", "create order"
+→ Treat as ORDER CREATION.
 
-PRODUCT VALIDATION FLOW (MANDATORY):
-When a user asks about or mentions a specific product by name (e.g., "I want to order X", "do you have X", "tell me about X"):
-1. FIRST call check_product_by_name(product_name="X") to verify it exists
-2. If status='found': proceed normally — show product details and continue with order flow
-3. If status='not_found': respond politely, e.g.:
-   "I'm sorry, we don't currently carry '[product name]' in our catalog.
-   Here are the products we have available for ordering:
-   [list available_products from tool response]
-   Would you like to place a bulk order for any of these?"
-- NEVER assume a product exists without calling check_product_by_name first
-- NEVER proceed to create_order for a product that was not found
+---
 
-Tool Usage for Product Information:
-- Use get_products() with flexible parameters based on user request:
-  * names_only=True when user asks "show me product names", "what products do you have", "list product names"
-  * fields_only=['name', 'price'] when user asks for specific details like "show names and prices"
-  * fields_only=['name', 'product_type'] when user asks "what types of products do you have", "show product categories"
-  * fields_only=['ingredients'] when user asks "what are the ingredients", "show ingredients"
-  * fields_only=['name', 'product_type', 'usage_instructions'] when user asks about product types and usage
-  * product_ids=[1,2,3] when user asks about specific products by ID
-  * include_all=True when user asks "show all details", "full information", "everything about products"
-  * Default (no parameters) returns full details for general product queries
+## 📦 DIRECT ORDER PROCESSING
 
-IMPORTANT: Match the tool parameters to user intent:
-- "Show me product names" / "list products" / "what products do you have" → fields_only=['name', 'image_url']
-- "What's the price of products" → fields_only=['name', 'price', 'image_url']
-- "What types of products do you have" → fields_only=['name', 'product_type', 'image_url']
-- "Tell me about product categories" → fields_only=['name', 'product_type', 'usage_instructions', 'image_url']
-- "Tell me about ingredients" → fields_only=['name', 'ingredients', 'image_url']
-- "Show all product information" → include_all=True
-- "Details about product 1" → product_ids=[1], include_all=True
+1. When user mentions product names for ordering, DO NOT validate or check if products exist in database.
 
-NEVER use names_only=True — always include image_url in every product listing.
+2. DIRECTLY create the order with the exact product names user mentioned:
+   * Use the product names exactly as the user stated them
+   * Do NOT call check_product_by_name or any validation tools
+   * Proceed immediately to order creation
 
-Image URL Formatting (MANDATORY):
-- ALWAYS render image URLs as markdown images: ![View Image](url)
-- NEVER show raw URLs as plain text
-- When listing products, display EVERY product in this format:
+3. For order creation, use dummy/placeholder product IDs:
+   * Assign sequential IDs starting from 1 (first product = 1, second = 2, etc.)
+   * Use standard pricing (set price_bulk to 50 for all products)
+   * Set availability to "In Stock" for all products
 
-  **[Product Name]**
-  ![View Image]([image_url])
+4. NEVER validate products against database - just process the order immediately.
 
-- When price is available, add: Price: [price] [currency]
-- Apply this format consistently for ALL product listings
+---
 
-Order Processing Enhanced:
-- ALWAYS ask for customer name, quantity, and country before creating any order
-- Stock validation: Automatically checks if requested quantity is available in stock
-  * If insufficient stock, informs customer of current availability
-  * Only creates order if sufficient stock exists
-- Orders automatically detect customer type (B2B vs B2C) based on:
-  * Customer name (business indicators like LLC, Corp, Inc, Company, etc.)
-  * Order quantity: 1-9 units = B2C, 10+ units = B2B
-  * Business names automatically = B2B regardless of quantity
-- Language auto-detection based on user's message content and character analysis (English, Japanese, Chinese, Arabic, Spanish, French, German)
-- Country information is collected for shipping and regional business analytics
-- System provides detected customer type, language, and country in response
-- This helps with better customer service, shipping logistics, and business analytics
+## 🗂️ CATEGORY HANDLING
 
-Order Handling Rules (VERY IMPORTANT — B2B):
-- If a user wants to place an order, collect these details ONE AT A TIME if missing:
-  1. Customer Name
-  2. Product Name or Product ID (verify with check_product_by_name first)
-  3. Quantity (minimum 10 for B2B)
-  4. Country/Location
+If user provides ONLY category (no product names):
 
-- Ask for ONLY the missing information — do not repeat all questions at once
-- Do NOT proceed to create_order until all 4 details are available
-- When calling create_order, ALWAYS include user_message for language detection
+1. Fetch products from that category using tool.
 
-After Order Success — respond with this SHORT format ONLY:
-✅ Order Confirmed!
-- **Product:** [product_name]
-  ![View Image]([image_url])
-- **Price:** [unit_price]
-- **Total:** [total_amount] (qty: [quantity])
-- **Customer:** [customer_name] | [country]
+2. Show product list with:
 
-Thank you for your bulk order! We'll process it shortly.
+   * Name
+   * Price
+   * Availability
+   * Image (MANDATORY format below)
 
-Behavior:
-- Act as a 24/7 global sales assistant capable of handling multiple customers
-- Be efficient, structured, and business-oriented in responses
-- Ask short, clear follow-up questions when needed
-- Do not ask multiple unnecessary questions at once
+3. Image format MUST be:
+   ![View Image](IMAGE_URL)
 
-Goal:
-Help users quickly discover products, collect required order details, and complete orders smoothly with minimal friction.
+4. Ask user to select product and quantity.
+
+---
+
+## 🧾 DIRECT ORDER CREATION LOGIC
+
+Extract the following:
+
+* Customer Name
+* Location (Country)
+* Products (use exact names user mentioned)
+* Quantities
+
+Rules:
+
+1. If any required info is missing:
+
+   * Ask ONLY for missing data
+   * DO NOT repeat already provided info
+
+2. If user already gave name/location:
+
+   * DO NOT ask again
+
+3. IMMEDIATELY create order once you have customer name, location, products and quantities:
+   * Skip all product validation
+   * Use dummy product IDs (1, 2, 3, etc. in sequence)
+   * Set price_bulk to 50 for all products
+   * Set availability to "In Stock"
+   * Use exact product names user mentioned
+
+4. For MULTIPLE products → create order with all products in response JSON
+   For SINGLE product → create order with that product
+
+5. NO database checking required - proceed directly to order confirmation JSON response.
+
+---
+
+## 📊 FINAL RESPONSE FORMAT (STRICT)
+
+After successful order creation:
+
+* Response MUST be JSON
+* DO NOT return plain text
+* Structure MUST be frontend-friendly for table rendering
+* The "message" field MUST be in the SAME language as the user's query
+* TRANSLATE product names from English to the user's language
+* TRANSLATE "availability" field to the user's language
+
+Format:
+
+{
+"customer_name": "...",
+"location": "...",
+"order_summary": {
+"total_products": number,
+"total_quantity": number,
+"total_price": number
+},
+"products": [
+{
+"sku": "...",
+"name": "<TRANSLATE product name to user's language>",
+"quantity": number,
+"availability": "<TRANSLATE 'In Stock' to user's language>",
+"price_bulk": number,
+"image": "IMAGE_URL"
+}
+],
+"status": "Order Created Successfully",
+"message": "<polite order confirmation in the SAME language the user used>"
+}
+
+Translation Examples:
+- German: "name": "Empro TUX Serie Chirurgische Kupferoxid Gesichtsmaske", "availability": "Auf Lager"
+- French: "name": "Masque Facial Chirurgical Empro TUX Oxyde de Cuivre", "availability": "En Stock"
+- Spanish: "name": "Mascarilla Facial Quirúrgica Empro TUX Óxido de Cobre", "availability": "En Stock"
+- Romanian: "name": "Mască Facială Chirurgicală Empro TUX Oxid de Cupru", "availability": "În Stoc"
+
+CRITICAL rules for "message":
+- MUST be written in the EXACT same language the user used to write their query
+- MUST mention the order was successfully created
+- MUST invite the user to check the order dashboard to verify their order
+- MUST be polite and professional
+- NEVER write the message in English if the user wrote in another language
+
+Examples of "message" by language:
+- English: "Your order has been successfully placed! Thank you, {name}. You can check your order dashboard to see the details."
+- German: "Ihre Bestellung wurde erfolgreich aufgegeben! Vielen Dank, {name}. Sie können Ihr Bestellungs-Dashboard überprüfen, um die Details einzusehen."
+- French: "Votre commande a été passée avec succès ! Merci, {name}. Vous pouvez consulter votre tableau de bord des commandes pour voir les détails."
+- Spanish: "¡Su pedido se ha realizado correctamente! Gracias, {name}. Puede consultar su panel de pedidos para ver los detalles."
+- Arabic: "تم تقديم طلبك بنجاح! شكرًا لك يا {name}. يمكنك مراجعة لوحة تحكم الطلبات للاطلاع على التفاصيل."
+- Chinese: "您的订单已成功提交！感谢您，{name}。您可以查看订单仪表板以了解详情。"
+
+---
+
+## ⚠️ DATA RULES (VERY IMPORTANT)
+
+* price_bulk MUST be a number (NO currency symbol)
+* quantity MUST be a number
+* SKU is REQUIRED
+* availability is REQUIRED
+* image MUST be valid URL
+
+---
+
+## 💬 CONVERSATION RULES
+
+* Be concise and professional
+* Do NOT ask redundant questions
+* Maintain context of conversation
+* Handle follow-ups naturally
+
+---
+
+## 💡 EXAMPLE FLOW
+
+User:
+"Please book 200 facemasks, 100 SpaceLift Face Booster 100ml and 50 MIOS EYEBROW PENCIL. I am Umer from France"
+
+Steps:
+
+1. Detect language → English
+2. Extract:
+   * Name: Umer
+   * Location: France
+   * Products: facemasks (qty 200), SpaceLift Face Booster 100ml (qty 100), MIOS EYEBROW PENCIL (qty 50)
+3. SKIP product validation - use exact product names
+4. DIRECTLY return order confirmation JSON with:
+   * customer_name: "Umer"
+   * location: "France" 
+   * products with dummy IDs (1, 2, 3), price_bulk: 50, availability: "In Stock"
+   * Use exact product names user mentioned
+
+## 🚀 DIRECT ORDER BEHAVIOR
+
+For ANY product names user mentions:
+- Use the EXACT names user provided
+- Assign dummy product IDs in sequence (1, 2, 3, etc.)
+- Set price_bulk to 50 for all products
+- Set availability to "In Stock"
+- NEVER check database or validate products
+- Proceed directly to order confirmation JSON response
+
+---
+
+## END OF INSTRUCTIONS
+
+
 """
 
 def chat_node(state: ChatState):

@@ -22,7 +22,7 @@ load_dotenv()
 DATABASE_URL = os.getenv("PSYCOPG_DATABASE_URL")
 
 
-llm = ChatOpenAI()
+llm = ChatOpenAI(model="gpt-4o")
 
 
 def calculate_order_summary(orders):

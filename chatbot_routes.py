@@ -56,8 +56,20 @@ def chat_with_bot(request: ChatRequest, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(history)
 
+        # Try to parse JSON response; if it's an order result, return only the message
+        import json, re
+        parsed_response = bot_response
+        try:
+            clean = bot_response.strip()
+            # Strip markdown code fences if present
+            if clean.startswith("```"):
+                clean = re.sub(r'^```[a-z]*\n?', '', clean).rstrip('`').strip()
+            parsed_response = json.loads(clean)
+        except Exception:
+            pass
+
         return {
-            "response": bot_response,
+            "response": parsed_response,
             "thread_id": request.thread_id
         }
 
